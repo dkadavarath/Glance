@@ -9,9 +9,9 @@
     mc:Ignorable="d"
     Background="Transparent">
 
-    <!-- Global page keyboard accelerators for Undo (Ctrl+Z) -->
     <Page.KeyboardAccelerators>
         <KeyboardAccelerator Key="Z" Modifiers="Control" Invoked="Undo_Invoked"/>
+        <KeyboardAccelerator Key="S" Modifiers="Control" Invoked="Save_Invoked"/>
     </Page.KeyboardAccelerators>
 
     <Grid RowDefinitions="Auto, *">
@@ -118,6 +118,45 @@
                     <!-- Settings Button -->
                     <Button Padding="8,6" ToolTipService.ToolTip="Configuración">
                         <SymbolIcon Symbol="Setting"/>
+                        <Button.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedRight">
+                                <StackPanel Spacing="16" Width="260" Padding="4">
+                                    <TextBlock Text="Configuración" FontSize="18" FontWeight="SemiBold"/>
+                                    
+                                    <!-- Theme Selector -->
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="Tema de la aplicación" FontSize="12" Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"/>
+                                        <ComboBox x:Name="ThemeComboBox" SelectionChanged="ThemeComboBox_SelectionChanged" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem Content="Claro" Tag="Light"/>
+                                            <ComboBoxItem Content="Oscuro" Tag="Dark"/>
+                                            <ComboBoxItem Content="Predeterminado del sistema" Tag="Default"/>
+                                        </ComboBox>
+                                    </StackPanel>
+
+                                    <!-- Auto-save Toggle -->
+                                    <StackPanel Spacing="2">
+                                        <ToggleSwitch x:Name="AutoSaveToggle" Header="Guardado automático" 
+                                                      IsOn="True" Toggled="AutoSaveToggle_Toggled"/>
+                                        <TextBlock Text="Guardar marcas automáticamente al salir" FontSize="11" Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}" Margin="0,-6,0,0"/>
+                                    </StackPanel>
+
+                                    <MenuFlyoutSeparator/>
+
+                                    <!-- About Section -->
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="Acerca de Glance" FontSize="14" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Versión 1.0.0.0" FontSize="12" Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"/>
+                                        <TextBlock Text="Desarrollado por jonas1ara" FontSize="12" Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"/>
+                                    </StackPanel>
+
+                                    <!-- Links -->
+                                    <StackPanel Spacing="4">
+                                        <HyperlinkButton Content="Sitio Web Oficial" NavigateUri="https://jonas1ara.github.io/Glance/"/>
+                                        <HyperlinkButton Content="Repositorio de GitHub" NavigateUri="https://github.com/jonas1ara/Glance"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
                     </Button>
                 </StackPanel>
             </Grid>

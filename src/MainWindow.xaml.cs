@@ -49,31 +49,60 @@ public sealed partial class MainWindow : Window
             // Cancel the closing event synchronously
             args.Cancel = true;
 
-            // Show confirmation dialog asynchronously
-            var dialog = new Microsoft.UI.Xaml.Controls.ContentDialog
-            {
-                Title = "Cambios sin guardar",
-                Content = "Tienes dibujos, marcas o notas que no has exportado al archivo PDF. ¿Estás seguro de que deseas salir sin guardar?",
-                PrimaryButtonText = "Salir sin guardar",
-                CloseButtonText = "Cancelar",
-                XamlRoot = this.Content.XamlRoot
-            };
-
+            // Load AutoSaveOnExit preference (defaults to true)
+            bool autoSave = true;
             try
             {
-                var result = await dialog.ShowAsync();
-                if (result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary)
+                var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+                if (localSettings.Values.TryGetValue("AutoSaveOnExit", out object? autoSaveValue) && autoSaveValue is bool savedAutoSave)
                 {
-                    _isClosingConfirmed = true;
-                    this.Close(); // Call Close() again to trigger the event and proceed
+                    autoSave = savedAutoSave;
                 }
             }
-            catch (Exception ex)
+            catch { }
+
+            if (autoSave)
             {
-                System.Diagnostics.Debug.WriteLine($"Error showing close confirmation dialog: {ex.Message}");
-                // In case of dialog error, allow close to prevent user being stuck
+                try
+                {
+                    // Attempt silent auto-save of original PDF before exiting
+                    await mainPage.SaveOriginalPdfSilentAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to auto-save on close: {ex.Message}");
+                }
                 _isClosingConfirmed = true;
-                this.Close();
+                this.Close(); // Close again
+            }
+            else
+            {
+                // Show confirmation dialog asynchronously
+                var dialog = new Microsoft.UI.Xaml.Controls.ContentDialog
+                {
+                    Title = "Cambios sin guardar",
+                    Content = "Tienes dibujos, marcas o notas sin guardar en el archivo PDF. ¿Estás seguro de que deseas salir sin guardar?",
+                    PrimaryButtonText = "Salir sin guardar",
+                    CloseButtonText = "Cancelar",
+                    XamlRoot = this.Content.XamlRoot
+                };
+
+                try
+                {
+                    var result = await dialog.ShowAsync();
+                    if (result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary)
+                    {
+                        _isClosingConfirmed = true;
+                        this.Close(); // Call Close() again to trigger the event and proceed
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error showing close confirmation dialog: {ex.Message}");
+                    // In case of dialog error, allow close to prevent user being stuck
+                    _isClosingConfirmed = true;
+                    this.Close();
+                }
             }
         }
     }

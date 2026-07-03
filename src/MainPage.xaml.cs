@@ -82,6 +82,99 @@ public sealed partial class MainPage : Page
         SidebarSplitView.Visibility = Visibility.Collapsed;
 
         LoadRecentFiles();
+        this.Loaded += MainPage_Loaded;
+    }
+
+    private void MainPage_Loaded(object sender, RoutedEventArgs e)
+    {
+        InitializeSettings();
+    }
+
+    private void InitializeSettings()
+    {
+        try
+        {
+            var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+            
+            // Load theme
+            string themeStr = "Default";
+            if (localSettings.Values.TryGetValue("AppTheme", out object? themeValue) && themeValue is string savedTheme)
+            {
+                themeStr = savedTheme;
+            }
+
+            // Set ComboBox index
+            int selectedIndex = 2; // Default (System)
+            if (themeStr == "Light") selectedIndex = 0;
+            else if (themeStr == "Dark") selectedIndex = 1;
+
+            if (ThemeComboBox != null)
+            {
+                ThemeComboBox.SelectedIndex = selectedIndex;
+            }
+
+            // Apply theme
+            if (Enum.TryParse(themeStr, out ElementTheme theme))
+            {
+                var mainWindow = (Application.Current as App)?.MainWindow;
+                if (mainWindow?.Content is FrameworkElement rootElement)
+                {
+                    rootElement.RequestedTheme = theme;
+                }
+            }
+
+            // Load AutoSave toggle
+            bool autoSave = true;
+            if (localSettings.Values.TryGetValue("AutoSaveOnExit", out object? autoSaveValue) && autoSaveValue is bool savedAutoSave)
+            {
+                autoSave = savedAutoSave;
+            }
+
+            if (AutoSaveToggle != null)
+            {
+                AutoSaveToggle.IsOn = autoSave;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error initializing settings: {ex.Message}");
+        }
+    }
+
+    private void ThemeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ThemeComboBox == null) return;
+        
+        if (ThemeComboBox.SelectedItem is ComboBoxItem selectedItem && selectedItem.Tag is string themeStr)
+        {
+            if (Enum.TryParse(themeStr, out ElementTheme theme))
+            {
+                var mainWindow = (Application.Current as App)?.MainWindow;
+                if (mainWindow?.Content is FrameworkElement rootElement)
+                {
+                    rootElement.RequestedTheme = theme;
+                }
+
+                try
+                {
+                    var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+                    localSettings.Values["AppTheme"] = themeStr;
+                }
+                catch { }
+            }
+        }
+    }
+
+    private void AutoSaveToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (AutoSaveToggle == null) return;
+        
+        try
+        {
+            var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+            localSettings.Values["AutoSaveOnExit"] = AutoSaveToggle.IsOn;
+        }
+        catch { }
     }
 
     private async void OpenPdf_Click(object sender, RoutedEventArgs e)
@@ -110,9 +203,9 @@ public sealed partial class MainPage : Page
         await SaveOriginalPdfAsync();
     }
 
-    private async Task SaveOriginalPdfAsync()
+    public async Task<bool> SaveOriginalPdfSilentAsync()
     {
-        if (string.IsNullOrEmpty(_currentPdfPath) || _pages.Count == 0) return;
+        if (string.IsNullOrEmpty(_currentPdfPath) || _pages.Count == 0) return false;
 
         // 1. Gather all current annotations
         var savedList = new List<SavedAnnotation>();
@@ -145,7 +238,7 @@ public sealed partial class MainPage : Page
         
         try
         {
-            SaveButton.IsEnabled = false;
+            if (SaveButton != null) SaveButton.IsEnabled = false;
 
             // 2. Export annotations to the temporary file
             var exportService = new Glance.Services.PdfExportService();
@@ -169,14 +262,29 @@ public sealed partial class MainPage : Page
             StorageFile file = await StorageFile.GetFileFromPathAsync(_currentPdfPath);
             await LoadPdfAsync(file);
 
+            return true;
         }
         catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error silent saving PDF: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            if (SaveButton != null) SaveButton.IsEnabled = true;
+        }
+    }
+
+    private async Task SaveOriginalPdfAsync()
+    {
+        bool success = await SaveOriginalPdfSilentAsync();
+        if (!success)
         {
             // If overwrite fails (e.g. read-only), fallback to Save As
             var dialog = new ContentDialog
             {
                 Title = "No se pudo sobrescribir",
-                Content = $"No se pudo sobrescribir el archivo original: {ex.Message}\n\n¿Deseas guardar una copia en otra ubicación?",
+                Content = "No se pudo sobrescribir el archivo original. ¿Deseas guardar una copia en otra ubicación?",
                 PrimaryButtonText = "Guardar Copia",
                 CloseButtonText = "Cancelar",
                 XamlRoot = this.XamlRoot
@@ -187,10 +295,6 @@ public sealed partial class MainPage : Page
             {
                 ExportPdf_Click(this, new RoutedEventArgs());
             }
-        }
-        finally
-        {
-            SaveButton.IsEnabled = true;
         }
     }
 
@@ -213,7 +317,6 @@ public sealed partial class MainPage : Page
         {
             try
             {
-                ExportButton.IsEnabled = false;
 
                 // 1. Gather all current annotations
                 var savedList = new List<SavedAnnotation>();
@@ -271,7 +374,6 @@ public sealed partial class MainPage : Page
             }
             finally
             {
-                ExportButton.IsEnabled = true;
             }
         }
     }
@@ -480,9 +582,39 @@ public sealed partial class MainPage : Page
                     if (_pdfDocument.PageCount > pagesToRenderImmediately)
                     {
                         System.Diagnostics.Debug.WriteLine("Starting background rendering of remaining pages...");
-
-                        // Fire-and-forget: render all remaining pages
                         _ = RenderRemainingPagesAsync(_pdfDocument, pagesToRenderImmediately);
+                    }
+
+                    // Generate thumbnail and add to recents list
+                    try
+                    {
+                        using PdfPage page = _pdfDocument.GetPage(0);
+                        var tempThumbStream = new InMemoryRandomAccessStream();
+                        await page.RenderToStreamAsync(tempThumbStream);
+                        
+                        string safeName = file.Path.Replace(":", "_").Replace("\\", "_").Replace("/", "_");
+                        string thumbPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, $"thumb_{safeName}.png");
+                        
+                        using (var outStream = File.Create(thumbPath))
+                        {
+                            var buffer = new byte[4096];
+                            tempThumbStream.Seek(0);
+                            using (var readStream = tempThumbStream.AsStreamForRead())
+                            {
+                                int bytesRead;
+                                while ((bytesRead = await readStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                                {
+                                    await outStream.WriteAsync(buffer, 0, bytesRead);
+                                }
+                            }
+                        }
+
+                        AddToRecentFiles(file.Path, file.Name, thumbPath);
+                    }
+                    catch (Exception thumbEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to generate fallback thumbnail: {thumbEx.Message}");
+                        AddToRecentFiles(file.Path, file.Name, "");
                     }
                 }
                 catch (Exception ex)
@@ -838,6 +970,13 @@ public sealed partial class MainPage : Page
     private void Undo_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         UndoLastAnnotation();
+        args.Handled = true;
+    }
+
+    // Keyboard Accelerator for Save (Ctrl+S)
+    private async void Save_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        await SaveOriginalPdfAsync();
         args.Handled = true;
     }
 
