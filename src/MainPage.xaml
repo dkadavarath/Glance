@@ -110,6 +110,11 @@
                         <SymbolIcon Symbol="Rotate"/>
                     </Button>
 
+                    <!-- Save PDF Button -->
+                    <Button x:Name="SaveButton" Click="SavePdf_Click" Padding="8,6" ToolTipService.ToolTip="Guardar en el archivo original" Visibility="Collapsed">
+                        <SymbolIcon Symbol="Save"/>
+                    </Button>
+
                     <!-- Settings Button -->
                     <Button Padding="8,6" ToolTipService.ToolTip="Configuración">
                         <SymbolIcon Symbol="Setting"/>
@@ -246,13 +251,13 @@
                                                     
                                                     <!-- Sticky Note button popup -->
                                                     <Button Content="💬" Padding="2" FontSize="14" Background="Transparent" BorderThickness="0" 
-                                                            Visibility="{x:Bind IsNoteVisibility, Mode=OneWay}" ToolTipService.ToolTip="Ver nota"
+                                                            Visibility="{x:Bind IsNoteVisibility, Mode=OneWay}" ToolTipService.ToolTip="View note"
                                                             Margin="-8,-8,0,0">
                                                         <Button.Flyout>
                                                             <Flyout>
                                                                 <StackPanel Spacing="8" Width="200">
-                                                                    <TextBlock Text="Nota del lector" FontWeight="SemiBold" FontSize="12"/>
-                                                                    <TextBox Text="{x:Bind Content, Mode=TwoWay}" AcceptsReturn="True" Height="80"/>
+                                                                    <TextBlock Text="Reader's Note" FontWeight="SemiBold" FontSize="12"/>
+                                                                    <TextBox Text="{x:Bind Content, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Write your note here..." AcceptsReturn="True" Height="80"/>
                                                                 </StackPanel>
                                                             </Flyout>
                                                         </Button.Flyout>

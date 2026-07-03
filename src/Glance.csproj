@@ -14,6 +14,7 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -30,6 +31,11 @@
 
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Tests\**" />
+    <None Include="Tests\**" />
   </ItemGroup>
 
   <!--
@@ -53,6 +59,7 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="0.4.0" />
+    <PackageReference Include="PDFsharp" Version="6.1.1" />
   </ItemGroup>
 
   <!--
@@ -88,10 +95,10 @@
   <!-- Include Native DLL in Output -->
   <ItemGroup>
     <!-- Copy from Rust build directory to C# output directory -->
-    <NativeBinary Include="..\native\glance-native\target\release\glance_native.dll">
+    <Content Include="..\native\glance-native\target\release\glance_native.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>glance_native.dll</Link>
-    </NativeBinary>
+    </Content>
   </ItemGroup>
 
   <!-- Post-build: Ensure DLL is in the exe directory -->

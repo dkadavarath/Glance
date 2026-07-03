@@ -21,13 +21,15 @@ pub fn validate_annotation(annot: &SavedAnnotation) -> Result<(), String> {
         return Err("Y coordinate cannot be negative".to_string());
     }
 
-    // Validate dimensions
-    if annot.width <= 0.0 {
-        return Err("Width must be greater than 0".to_string());
-    }
+    // Validate dimensions: only required for Highlight (0)
+    if annot.annotation_type == 0 {
+        if annot.width <= 0.0 {
+            return Err("Width must be greater than 0".to_string());
+        }
 
-    if annot.height <= 0.0 {
-        return Err("Height must be greater than 0".to_string());
+        if annot.height <= 0.0 {
+            return Err("Height must be greater than 0".to_string());
+        }
     }
 
     // Validate color format (#RRGGBB)
@@ -101,6 +103,35 @@ mod tests {
         };
 
         assert!(validate_annotation(&annot).is_ok());
+    }
+
+    #[test]
+    fn test_valid_note_and_pen() {
+        let note = SavedAnnotation {
+            page_index: 0,
+            annotation_type: 1, // Note
+            x: 10.0,
+            y: 20.0,
+            width: 0.0,
+            height: 0.0,
+            color_hex: "#FFFF00".to_string(),
+            content: "test note".to_string(),
+            points: vec![],
+        };
+        assert!(validate_annotation(&note).is_ok());
+
+        let pen = SavedAnnotation {
+            page_index: 0,
+            annotation_type: 2, // Pen
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+            color_hex: "#FF0000".to_string(),
+            content: "".to_string(),
+            points: vec![],
+        };
+        assert!(validate_annotation(&pen).is_ok());
     }
 
     #[test]

@@ -39,6 +39,13 @@ public sealed partial class MainPage : Page
 {
     public static MainPage? Current { get; private set; }
 
+    public bool HasUnsavedChanges { get; set; } = false;
+
+    private static readonly System.Text.Json.JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+    };
+
     private PdfRenderService? _pdfRenderService;
     private PdfDocument? _pdfDocument;  // Keep reference for lazy rendering
     private ObservableCollection<PdfPageViewModel> _pages = new();
@@ -95,6 +102,177 @@ public sealed partial class MainPage : Page
         {
             DocTitleText.Text = file.Name;
             await LoadPdfAsync(file);
+        }
+    }
+
+    private async void SavePdf_Click(object sender, RoutedEventArgs e)
+    {
+        await SaveOriginalPdfAsync();
+    }
+
+    private async Task SaveOriginalPdfAsync()
+    {
+        if (string.IsNullOrEmpty(_currentPdfPath) || _pages.Count == 0) return;
+
+        // 1. Gather all current annotations
+        var savedList = new List<SavedAnnotation>();
+        foreach (var page in _pages)
+        {
+            foreach (var anno in page.Annotations)
+            {
+                var savedAnno = new SavedAnnotation
+                {
+                    PageIndex = page.PageIndex,
+                    Type = anno.Type,
+                    X = anno.X,
+                    Y = anno.Y,
+                    Width = anno.Width,
+                    Height = anno.Height,
+                    Content = anno.Content ?? "",
+                    ColorHex = anno.ColorHex
+                };
+
+                foreach (var pt in anno.PointsCollection)
+                {
+                    savedAnno.Points.Add(new SavedPoint { X = pt.X, Y = pt.Y });
+                }
+
+                savedList.Add(savedAnno);
+            }
+        }
+
+        string tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString() + ".pdf");
+        
+        try
+        {
+            SaveButton.IsEnabled = false;
+
+            // 2. Export annotations to the temporary file
+            var exportService = new Glance.Services.PdfExportService();
+            await exportService.ExportPdfWithAnnotationsAsync(_currentPdfPath, tempFile, savedList);
+
+            // 3. Clear resources to unlock original file
+            _pdfDocument = null;
+            if (_pdfRenderService != null)
+            {
+                _pdfRenderService.Dispose();
+                _pdfRenderService = null;
+            }
+
+            // 4. Overwrite original file
+            File.Copy(tempFile, _currentPdfPath, true);
+            try { File.Delete(tempFile); } catch { }
+
+            HasUnsavedChanges = false;
+
+            // 5. Reload the PDF to restore the visual state and pages
+            StorageFile file = await StorageFile.GetFileFromPathAsync(_currentPdfPath);
+            await LoadPdfAsync(file);
+
+        }
+        catch (Exception ex)
+        {
+            // If overwrite fails (e.g. read-only), fallback to Save As
+            var dialog = new ContentDialog
+            {
+                Title = "No se pudo sobrescribir",
+                Content = $"No se pudo sobrescribir el archivo original: {ex.Message}\n\n¿Deseas guardar una copia en otra ubicación?",
+                PrimaryButtonText = "Guardar Copia",
+                CloseButtonText = "Cancelar",
+                XamlRoot = this.XamlRoot
+            };
+
+            var result = await dialog.ShowAsync();
+            if (result == ContentDialogResult.Primary)
+            {
+                ExportPdf_Click(this, new RoutedEventArgs());
+            }
+        }
+        finally
+        {
+            SaveButton.IsEnabled = true;
+        }
+    }
+
+    private async void ExportPdf_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_currentPdfPath) || _pages.Count == 0) return;
+
+        var picker = new FileSavePicker();
+        
+        var app = Application.Current as App;
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(app?.MainWindow);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+        picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+        picker.FileTypeChoices.Add("PDF Document", new List<string> { ".pdf" });
+        picker.SuggestedFileName = Path.GetFileNameWithoutExtension(_currentPdfPath) + "_annotated";
+
+        StorageFile file = await picker.PickSaveFileAsync();
+        if (file != null)
+        {
+            try
+            {
+                ExportButton.IsEnabled = false;
+
+                // 1. Gather all current annotations
+                var savedList = new List<SavedAnnotation>();
+                foreach (var page in _pages)
+                {
+                    foreach (var anno in page.Annotations)
+                    {
+                        var savedAnno = new SavedAnnotation
+                        {
+                            PageIndex = page.PageIndex,
+                            Type = anno.Type,
+                            X = anno.X,
+                            Y = anno.Y,
+                            Width = anno.Width,
+                            Height = anno.Height,
+                            Content = anno.Content ?? "",
+                            ColorHex = anno.ColorHex
+                        };
+
+                        foreach (var pt in anno.PointsCollection)
+                        {
+                            savedAnno.Points.Add(new SavedPoint { X = pt.X, Y = pt.Y });
+                        }
+
+                        savedList.Add(savedAnno);
+                    }
+                }
+
+                // 2. Export using PdfExportService
+                var exportService = new Glance.Services.PdfExportService();
+                await exportService.ExportPdfWithAnnotationsAsync(_currentPdfPath, file.Path, savedList);
+
+                HasUnsavedChanges = false;
+
+                // 3. Show success dialog
+                var dialog = new ContentDialog
+                {
+                    Title = "Exportación Exitosa",
+                    Content = $"El archivo PDF con tus firmas y anotaciones se ha guardado en:\n\n{file.Path}",
+                    CloseButtonText = "OK",
+                    XamlRoot = this.XamlRoot
+                };
+                await dialog.ShowAsync();
+            }
+            catch (Exception ex)
+            {
+                var dialog = new ContentDialog
+                {
+                    Title = "Error de Exportación",
+                    Content = $"No se pudo exportar el PDF: {ex.Message}",
+                    CloseButtonText = "OK",
+                    XamlRoot = this.XamlRoot
+                };
+                await dialog.ShowAsync();
+            }
+            finally
+            {
+                ExportButton.IsEnabled = true;
+            }
         }
     }
 
@@ -186,10 +364,12 @@ public sealed partial class MainPage : Page
             PageNumberInput.Text = "1";
             TotalPagesText.Text = "/ 0";
             _currentPdfPath = file.Path;
+            HasUnsavedChanges = false;
 
             // Hide welcome screen, show document panel
             WelcomePanel.Visibility = Visibility.Collapsed;
             SidebarSplitView.Visibility = Visibility.Visible;
+            SaveButton.Visibility = Visibility.Visible;
 
             // Try Rust backend first, fallback to Windows.Data.Pdf
             bool usedRust = false;
@@ -247,7 +427,13 @@ public sealed partial class MainPage : Page
 
                 try
                 {
-                    _pdfDocument = await PdfDocument.LoadFromFileAsync(file);
+                    using (var fileStream = await file.OpenAsync(FileAccessMode.Read))
+                    {
+                        var memStream = new InMemoryRandomAccessStream();
+                        await RandomAccessStream.CopyAsync(fileStream, memStream);
+                        memStream.Seek(0);
+                        _pdfDocument = await PdfDocument.LoadFromStreamAsync(memStream);
+                    }
 
                     if (_pdfDocument == null)
                     {
@@ -548,6 +734,7 @@ public sealed partial class MainPage : Page
         if (pageVm == null) return;
 
         var point = e.GetCurrentPoint(element).Position;
+        HasUnsavedChanges = true;
 
         if (_currentMode == EditMode.Highlight)
         {
@@ -576,7 +763,7 @@ public sealed partial class MainPage : Page
                 Type = AnnotationType.Note,
                 X = point.X,
                 Y = point.Y,
-                Content = "Escribe tu nota aquí..."
+                Content = ""
             };
             pageVm.Annotations.Add(note);
             _annotationHistory.Add((pageVm, note));
@@ -663,6 +850,7 @@ public sealed partial class MainPage : Page
             _annotationHistory.RemoveAt(_annotationHistory.Count - 1);
 
             last.Page.Annotations.Remove(last.Annotation);
+            HasUnsavedChanges = true;
             _ = SaveAnnotationsAsync();
         }
     }
@@ -852,7 +1040,7 @@ public sealed partial class MainPage : Page
                 }
             }
 
-            string json = System.Text.Json.JsonSerializer.Serialize(savedList);
+            string json = System.Text.Json.JsonSerializer.Serialize(savedList, _jsonOptions);
             string filePath = GetAnnotationFilePath(_currentPdfPath);
 
             // Validate annotations before saving
@@ -876,7 +1064,7 @@ public sealed partial class MainPage : Page
 
             // Use Rust backend for persistence
             string json = await _persistenceService.LoadAnnotationsAsync(filePath);
-            var savedList = System.Text.Json.JsonSerializer.Deserialize<List<SavedAnnotation>>(json);
+            var savedList = System.Text.Json.JsonSerializer.Deserialize<List<SavedAnnotation>>(json, _jsonOptions);
 
             if (savedList == null) return;
 
@@ -895,12 +1083,14 @@ public sealed partial class MainPage : Page
                         ColorHex = saved.ColorHex ?? "#FFFF00"
                     };
 
-                    if (saved.Points != null)
+                    if (saved.Points != null && saved.Points.Count > 0)
                     {
+                        var pc = new Microsoft.UI.Xaml.Media.PointCollection();
                         foreach (var pt in saved.Points)
                         {
-                            annoVm.PointsCollection.Add(new Point(pt.X, pt.Y));
+                            pc.Add(new Point(pt.X, pt.Y));
                         }
+                        annoVm.PointsCollection = pc;
                     }
 
                     _pages[saved.PageIndex].Annotations.Add(annoVm);
@@ -1069,6 +1259,10 @@ public class AnnotationViewModel : INotifyPropertyChanged
         {
             if (SetProperty(ref _content, value))
             {
+                if (MainPage.Current != null)
+                {
+                    MainPage.Current.HasUnsavedChanges = true;
+                }
                 _ = MainPage.Current?.SaveAnnotationsAsync();
             }
         }
@@ -1081,6 +1275,10 @@ public class AnnotationViewModel : INotifyPropertyChanged
         {
             if (SetProperty(ref _colorHex, value))
             {
+                if (MainPage.Current != null)
+                {
+                    MainPage.Current.HasUnsavedChanges = true;
+                }
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ColorBrush)));
                 _ = MainPage.Current?.SaveAnnotationsAsync();
             }
