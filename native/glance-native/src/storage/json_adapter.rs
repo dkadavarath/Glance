@@ -16,6 +16,10 @@ pub struct SavedAnnotation {
     pub color_hex: String,
     pub content: String,
     pub points: Vec<SavedPoint>,
+    #[serde(default)]
+    pub thickness: f64,
+    #[serde(default, rename = "rotationAngle")]
+    pub rotation_angle: f64,
 }
 
 /// Point for pen strokes
@@ -65,6 +69,8 @@ mod tests {
                 color_hex: "#FFFF00".to_string(),
                 content: "".to_string(),
                 points: vec![],
+                thickness: 0.0,
+                rotation_angle: 0.0,
             },
         ];
 

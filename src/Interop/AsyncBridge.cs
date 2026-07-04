@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace FluentPdfViewer.Interop;
+namespace Glance.Interop;
 
 /// <summary>
 /// Bridge between C# async/await and synchronous Rust FFI calls.
@@ -93,7 +93,7 @@ public static class AsyncBridge
             // Free native memory (CRITICAL - prevents memory leak)
             if (dataPtrNative != IntPtr.Zero)
             {
-                GlanceNative.memory_free(dataPtrNative);
+                GlanceNative.memory_free(dataPtrNative, dataLen);
             }
 
             return pngBytes;

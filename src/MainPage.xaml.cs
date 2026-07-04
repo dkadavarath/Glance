@@ -18,14 +18,15 @@ using Windows.Storage.Streams;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Glance.Services;
 
-namespace FluentPdfViewer;
+namespace Glance;
 
 public enum EditMode
 {
     Navigate,
     Highlight,
     Note,
-    Pen
+    Pen,
+    Eraser
 }
 
 public enum AnnotationType
@@ -47,10 +48,14 @@ public sealed partial class MainPage : Page
     };
 
     private PdfRenderService? _pdfRenderService;
+    private CancellationTokenSource? _backgroundRenderCts;
+    private Task? _backgroundRenderTask;
+    private readonly SemaphoreSlim _ffiSemaphore = new(1, 1);
     private PdfDocument? _pdfDocument;  // Keep reference for lazy rendering
     private ObservableCollection<PdfPageViewModel> _pages = new();
     private int _currentPageIndex = 0;
     private bool _isScrollingProgrammatically = false;
+    private bool _isUnloading = false;
     private string _currentPdfPath = "";
     private PersistenceService _persistenceService = new();
     private AnnotationService _annotationService = new();
@@ -59,6 +64,7 @@ public sealed partial class MainPage : Page
     // Annotation states
     private EditMode _currentMode = EditMode.Navigate;
     private bool _isDrawingHighlight = false;
+    private bool _isErasing = false;
     private Point _startPoint;
     private AnnotationViewModel? _activeHighlight;
     private string _activeColorHex = "#FFFF00"; // Default Yellow
@@ -68,6 +74,14 @@ public sealed partial class MainPage : Page
 
     // Recent Files collection
     private ObservableCollection<RecentDocumentViewModel> _recentDocs = new();
+
+    // Secondary PDF pages (for Split View comparison)
+    private ObservableCollection<PdfPageViewModel> _pagesRight = new();
+
+    // Search states
+    private List<SearchMatch> _searchMatches = new();
+    private int _currentMatchIndex = -1;
+    private Microsoft.UI.Xaml.DispatcherTimer? _searchDebounceTimer;
 
     public MainPage()
     {
@@ -88,6 +102,95 @@ public sealed partial class MainPage : Page
     private void MainPage_Loaded(object sender, RoutedEventArgs e)
     {
         InitializeSettings();
+        InitializeLocalization();
+    }
+
+    private void InitializeLocalization()
+    {
+        try
+        {
+            // Set all UI element strings based on system language (detected in LocalizationService)
+            bool isEs = Glance.Services.LocalizationService.IsSpanish;
+
+            // Toolbars & Buttons ToolTips
+            if (ToggleSidebarButton != null) ToolTipService.SetToolTip(ToggleSidebarButton, Glance.Services.LocalizationService.Get("ToggleSidebar"));
+            if (OpenPdfButton != null) ToolTipService.SetToolTip(OpenPdfButton, Glance.Services.LocalizationService.Get("OpenPdfFile"));
+            if (OpenButtonText != null) OpenButtonText.Text = Glance.Services.LocalizationService.Get("Open");
+            if (HomeButton != null) ToolTipService.SetToolTip(HomeButton, Glance.Services.LocalizationService.Get("HomeTooltip"));
+            if (HomeButtonText != null) HomeButtonText.Text = Glance.Services.LocalizationService.Get("Home");
+
+            if (PrevPageButton != null) ToolTipService.SetToolTip(PrevPageButton, Glance.Services.LocalizationService.Get("PrevPage"));
+            if (NextPageButton != null) ToolTipService.SetToolTip(NextPageButton, Glance.Services.LocalizationService.Get("NextPage"));
+
+            if (ReadModeButton != null) ToolTipService.SetToolTip(ReadModeButton, Glance.Services.LocalizationService.Get("ReadMode"));
+            if (HighlightModeButton != null) ToolTipService.SetToolTip(HighlightModeButton, Glance.Services.LocalizationService.Get("HighlightMode"));
+            if (NoteModeButton != null) ToolTipService.SetToolTip(NoteModeButton, Glance.Services.LocalizationService.Get("NoteMode"));
+            if (PenModeButton != null) ToolTipService.SetToolTip(PenModeButton, Glance.Services.LocalizationService.Get("PenMode"));
+            if (EraserModeButton != null) ToolTipService.SetToolTip(EraserModeButton, Glance.Services.LocalizationService.Get("EraserMode"));
+
+            // Colors ToolTips
+            if (ColorYellowButton != null) ToolTipService.SetToolTip(ColorYellowButton, Glance.Services.LocalizationService.Get("ColorYellow"));
+            if (ColorGreenButton != null) ToolTipService.SetToolTip(ColorGreenButton, Glance.Services.LocalizationService.Get("ColorGreen"));
+            if (ColorCyanButton != null) ToolTipService.SetToolTip(ColorCyanButton, Glance.Services.LocalizationService.Get("ColorCyan"));
+            if (ColorMagentaButton != null) ToolTipService.SetToolTip(ColorMagentaButton, Glance.Services.LocalizationService.Get("ColorMagenta"));
+            if (ColorRedButton != null) ToolTipService.SetToolTip(ColorRedButton, Glance.Services.LocalizationService.Get("ColorRed"));
+            if (ColorBlueButton != null) ToolTipService.SetToolTip(ColorBlueButton, Glance.Services.LocalizationService.Get("ColorBlue"));
+            if (ColorBlackButton != null) ToolTipService.SetToolTip(ColorBlackButton, Glance.Services.LocalizationService.Get("ColorBlack"));
+
+            // Sliders
+            if (ThicknessLabel != null) ThicknessLabel.Text = Glance.Services.LocalizationService.Get("Thickness");
+            if (OpacityLabel != null) OpacityLabel.Text = Glance.Services.LocalizationService.Get("Opacity");
+
+            // ComboBox & Buttons
+            if (ZoomFitWidthItem != null) ZoomFitWidthItem.Content = Glance.Services.LocalizationService.Get("ThemeSystem").Equals("System default") ? "Fit Width" : "Ajustar Ancho"; // Special fallback for zoom option
+            if (RotateButton != null) ToolTipService.SetToolTip(RotateButton, Glance.Services.LocalizationService.Get("Rotate"));
+            if (SplitViewToggleButton != null) ToolTipService.SetToolTip(SplitViewToggleButton, Glance.Services.LocalizationService.Get("SplitView"));
+            if (SaveButton != null) ToolTipService.SetToolTip(SaveButton, Glance.Services.LocalizationService.Get("SaveOriginal"));
+            if (SettingsButton != null) ToolTipService.SetToolTip(SettingsButton, Glance.Services.LocalizationService.Get("Settings"));
+
+            // Settings Panel
+            if (SettingsTitleText != null) SettingsTitleText.Text = Glance.Services.LocalizationService.Get("Settings");
+            if (AppThemeLabel != null) AppThemeLabel.Text = Glance.Services.LocalizationService.Get("AppTheme");
+
+            if (ThemeLightItem != null) ThemeLightItem.Content = Glance.Services.LocalizationService.Get("ThemeLight");
+            if (ThemeDarkItem != null) ThemeDarkItem.Content = Glance.Services.LocalizationService.Get("ThemeDark");
+            if (ThemeDefaultItem != null) ThemeDefaultItem.Content = Glance.Services.LocalizationService.Get("ThemeSystem");
+
+            if (AutoSaveToggle != null) AutoSaveToggle.Header = Glance.Services.LocalizationService.Get("AutoSaveHeader");
+            if (AutoSaveSubtext != null) AutoSaveSubtext.Text = Glance.Services.LocalizationService.Get("AutoSaveSubtext");
+
+            if (AboutTitleText != null) AboutTitleText.Text = Glance.Services.LocalizationService.Get("AboutTitle");
+            if (DeveloperText != null) DeveloperText.Text = Glance.Services.LocalizationService.Get("Developer");
+
+            if (WebsiteLink != null) WebsiteLink.Content = Glance.Services.LocalizationService.Get("WebsiteLink");
+            if (GitHubLink != null) GitHubLink.Content = Glance.Services.LocalizationService.Get("GitHubLink");
+
+            // Welcome Screen
+            if (WelcomeSubtitleText != null) WelcomeSubtitleText.Text = Glance.Services.LocalizationService.Get("WelcomeSubtitle");
+            if (WelcomeOpenButtonText != null) WelcomeOpenButtonText.Text = Glance.Services.LocalizationService.Get("WelcomeOpenButton");
+            if (RecientesHeader != null) RecientesHeader.Text = Glance.Services.LocalizationService.Get("RecentDocuments");
+
+            // Sidebar
+            if (ThumbnailsHeader != null) ThumbnailsHeader.Text = Glance.Services.LocalizationService.Get("Thumbnails");
+
+            // Comparison
+            if (OpenSecondPdfButton != null) ToolTipService.SetToolTip(OpenSecondPdfButton, Glance.Services.LocalizationService.Get("OpenSecondPdf"));
+            if (OpenSecondPdfButtonText != null) OpenSecondPdfButtonText.Text = Glance.Services.LocalizationService.Get("OpenSecondPdfText");
+            if (SecondaryTitleText != null) SecondaryTitleText.Text = Glance.Services.LocalizationService.Get("SideBySideComparer");
+            if (CloseSecondPdfButton != null) ToolTipService.SetToolTip(CloseSecondPdfButton, Glance.Services.LocalizationService.Get("CloseComparison"));
+
+            // Search Panel
+            if (SearchTextBox != null) SearchTextBox.PlaceholderText = Glance.Services.LocalizationService.Get("SearchPlaceholder");
+            if (SearchPrevButton != null) ToolTipService.SetToolTip(SearchPrevButton, Glance.Services.LocalizationService.Get("SearchPrev"));
+            if (SearchNextButton != null) ToolTipService.SetToolTip(SearchNextButton, Glance.Services.LocalizationService.Get("SearchNext"));
+            if (SearchCloseButton != null) ToolTipService.SetToolTip(SearchCloseButton, Glance.Services.LocalizationService.Get("SearchClose"));
+
+            UpdateSearchStatus();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error initializing localization: {ex.Message}");
+        }
     }
 
     private void InitializeSettings()
@@ -203,48 +306,91 @@ public sealed partial class MainPage : Page
         await SaveOriginalPdfAsync();
     }
 
-    public async Task<bool> SaveOriginalPdfSilentAsync()
+    private async void HomeButton_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrEmpty(_currentPdfPath) || _pages.Count == 0) return false;
-
-        // 1. Gather all current annotations
-        var savedList = new List<SavedAnnotation>();
-        foreach (var page in _pages)
+        _isUnloading = true;
+        if (HasUnsavedChanges)
         {
-            foreach (var anno in page.Annotations)
+            // Load AutoSaveOnExit preference
+            bool autoSave = true;
+            try
             {
-                var savedAnno = new SavedAnnotation
+                var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+                if (localSettings.Values.TryGetValue("AutoSaveOnExit", out object? autoSaveValue) && autoSaveValue is bool savedAutoSave)
                 {
-                    PageIndex = page.PageIndex,
-                    Type = anno.Type,
-                    X = anno.X,
-                    Y = anno.Y,
-                    Width = anno.Width,
-                    Height = anno.Height,
-                    Content = anno.Content ?? "",
-                    ColorHex = anno.ColorHex
+                    autoSave = savedAutoSave;
+                }
+            }
+            catch { }
+
+            if (autoSave)
+            {
+                try
+                {
+                    await SaveOriginalPdfSilentAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to auto-save on returning home: {ex.Message}");
+                }
+            }
+            else
+            {
+                // Show confirmation dialog
+                var dialog = new Microsoft.UI.Xaml.Controls.ContentDialog
+                {
+                    Title = Glance.Services.LocalizationService.Get("UnsavedChangesTitle"),
+                    Content = Glance.Services.LocalizationService.Get("UnsavedChangesContent"),
+                    PrimaryButtonText = Glance.Services.LocalizationService.Get("SaveAndExit"),
+                    SecondaryButtonText = Glance.Services.LocalizationService.Get("ExitWithoutSaving"),
+                    CloseButtonText = Glance.Services.LocalizationService.Get("Cancel"),
+                    XamlRoot = this.Content.XamlRoot
                 };
 
-                foreach (var pt in anno.PointsCollection)
+                try
                 {
-                    savedAnno.Points.Add(new SavedPoint { X = pt.X, Y = pt.Y });
+                    var result = await dialog.ShowAsync();
+                    if (result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary)
+                    {
+                        try
+                        {
+                            await SaveOriginalPdfSilentAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Failed to save on returning home: {ex.Message}");
+                        }
+                    }
+                    else if (result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Secondary)
+                    {
+                        // Proceed without saving
+                    }
+                    else
+                    {
+                        // Cancel going home
+                        _isUnloading = false;
+                        return;
+                    }
                 }
-
-                savedList.Add(savedAnno);
+                catch
+                {
+                    // Fallback
+                }
             }
         }
 
-        string tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString() + ".pdf");
-        
+        // Cancel background rendering FIRST to release the semaphore and prevent deadlocks!
+        if (_backgroundRenderCts != null)
+        {
+            try { _backgroundRenderCts.Cancel(); } catch { }
+        }
+
+        // Proceed to unload document and return home under the FFI semaphore lock
+        await _ffiSemaphore.WaitAsync();
         try
         {
-            if (SaveButton != null) SaveButton.IsEnabled = false;
-
-            // 2. Export annotations to the temporary file
-            var exportService = new Glance.Services.PdfExportService();
-            await exportService.ExportPdfWithAnnotationsAsync(_currentPdfPath, tempFile, savedList);
-
-            // 3. Clear resources to unlock original file
+            await CancelBackgroundRenderAsync();
+            
             _pdfDocument = null;
             if (_pdfRenderService != null)
             {
@@ -252,25 +398,188 @@ public sealed partial class MainPage : Page
                 _pdfRenderService = null;
             }
 
-            // 4. Overwrite original file
-            File.Copy(tempFile, _currentPdfPath, true);
-            try { File.Delete(tempFile); } catch { }
-
+            _pages.Clear();
+            _annotationHistory.Clear();
+            _currentPageIndex = 0;
+            _currentPdfPath = "";
             HasUnsavedChanges = false;
 
-            // 5. Reload the PDF to restore the visual state and pages
-            StorageFile file = await StorageFile.GetFileFromPathAsync(_currentPdfPath);
-            await LoadPdfAsync(file);
+            DocTitleText.Text = "Glance";
+            TotalPagesText.Text = "/ 0";
+            PageNumberInput.Text = "1";
 
-            return true;
+            // Toggle panels visibility
+            WelcomePanel.Visibility = Visibility.Visible;
+            SidebarSplitView.Visibility = Visibility.Collapsed;
+            SaveButton.Visibility = Visibility.Collapsed;
+            if (SplitViewToggleButton != null) SplitViewToggleButton.Visibility = Visibility.Collapsed;
+            if (HomeButton != null) HomeButton.Visibility = Visibility.Collapsed;
+
+            LoadRecentFiles();
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Error silent saving PDF: {ex.Message}");
-            return false;
+            System.Diagnostics.Debug.WriteLine($"Error unloading document: {ex.Message}");
         }
         finally
         {
+            _ffiSemaphore.Release();
+        }
+    }
+
+    public async Task CleanupForExitAsync()
+    {
+        // Cancel background rendering FIRST to release the semaphore and prevent deadlocks!
+        if (_backgroundRenderCts != null)
+        {
+            try { _backgroundRenderCts.Cancel(); } catch { }
+        }
+
+        await _ffiSemaphore.WaitAsync();
+        try
+        {
+            await CancelBackgroundRenderAsync();
+            _pdfDocument = null;
+            if (_pdfRenderService != null)
+            {
+                _pdfRenderService.Dispose();
+                _pdfRenderService = null;
+            }
+        }
+        finally
+        {
+            _ffiSemaphore.Release();
+        }
+    }
+
+    public async Task<bool> SaveOriginalPdfSilentAsync(bool onExit = false)
+    {
+        if (string.IsNullOrEmpty(_currentPdfPath) || _pages.Count == 0) return false;
+
+        // Cancel background rendering FIRST to release the semaphore and prevent deadlocks!
+        if (_backgroundRenderCts != null)
+        {
+            try { _backgroundRenderCts.Cancel(); } catch { }
+        }
+
+        await _ffiSemaphore.WaitAsync();
+        try
+        {
+            // 1. Gather all current annotations
+            var savedList = new List<SavedAnnotation>();
+            foreach (var page in _pages)
+            {
+                foreach (var anno in page.Annotations)
+                {
+                    var savedAnno = new SavedAnnotation
+                    {
+                        PageIndex = page.PageIndex,
+                        Type = anno.Type,
+                        X = anno.X,
+                        Y = anno.Y,
+                        Width = anno.Width,
+                        Height = anno.Height,
+                        Content = anno.Content ?? "",
+                        ColorHex = anno.ColorHex,
+                        Thickness = anno.Thickness,
+                        RotationAngle = page.RotationAngle
+                    };
+
+                    foreach (var pt in anno.PointsCollection)
+                    {
+                        savedAnno.Points.Add(new SavedPoint { X = pt.X, Y = pt.Y });
+                    }
+
+                    savedList.Add(savedAnno);
+                }
+            }
+
+            var pageRotations = new Dictionary<int, double>();
+            foreach (var page in _pages)
+            {
+                pageRotations[page.PageIndex] = page.RotationAngle;
+            }
+
+            string tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString() + ".pdf");
+            
+            try
+            {
+                if (SaveButton != null) SaveButton.IsEnabled = false;
+
+                // Cancel background rendering task to avoid accessing native engine during/after cleanup
+                await CancelBackgroundRenderAsync();
+
+                // 1. Clear resources to unlock original file BEFORE exporting (so PdfSharp can access it)
+                _pdfDocument = null;
+                if (_pdfRenderService != null)
+                {
+                    _pdfRenderService.Dispose();
+                    _pdfRenderService = null;
+                }
+
+                // 2. Export annotations to the temporary file
+                var exportService = new Glance.Services.PdfExportService();
+                await exportService.ExportPdfWithAnnotationsAsync(_currentPdfPath, tempFile, savedList, pageRotations);
+
+                // 3. Overwrite original file
+                File.Copy(tempFile, _currentPdfPath, true);
+                try { File.Delete(tempFile); } catch { }
+
+                // Reset the rotation angle since rotation is now permanently applied in the PDF file itself.
+                // Keep the annotations in memory so they remain editable and clickable.
+                foreach (var page in _pages)
+                {
+                    page.RotationAngle = 0.0;
+                }
+                HasUnsavedChanges = false;
+
+                // Sync the annotations back to the JSON file (since rotation was reset to 0)
+                await SaveAnnotationsInternalAsync();
+
+                if (onExit)
+                {
+                    // Exit early without re-rendering or reloading PDF in memory to avoid shutdown deadlocks
+                    return true;
+                }
+
+                // 4. Reload PDF structures in memory without resetting the page list (prevents scroll jumps and double refreshes)
+                StorageFile file = await StorageFile.GetFileFromPathAsync(_currentPdfPath);
+                using (var fileStream = await file.OpenAsync(FileAccessMode.Read))
+                {
+                    var memStream = new InMemoryRandomAccessStream();
+                    await RandomAccessStream.CopyAsync(fileStream, memStream);
+                    memStream.Seek(0);
+                    _pdfDocument = await PdfDocument.LoadFromStreamAsync(memStream);
+                }
+
+                // Re-initialize Rust PDF engine with the updated file
+                _pdfRenderService = new PdfRenderService();
+                await _pdfRenderService.InitializeAsync(_currentPdfPath);
+
+                // Re-render the current page smoothly
+                await RenderPageAsync(_pdfDocument, (uint)_currentPageIndex);
+
+                // Start background rendering of remaining pages silently to update their cache
+                _backgroundRenderCts = new CancellationTokenSource();
+                _backgroundRenderTask = RenderRemainingPagesAsync(_pdfDocument, 0, _backgroundRenderCts.Token);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error silent saving PDF: {ex.Message}");
+                try
+                {
+                    string logPath = Path.Combine(Windows.Storage.ApplicationData.Current.LocalFolder.Path, "save_error.txt");
+                    File.WriteAllText(logPath, $"Time: {DateTime.Now}\nError: {ex.Message}\nStack: {ex.StackTrace}\nInner: {ex.InnerException?.Message}");
+                }
+                catch { }
+                return false;
+            }
+        }
+        finally
+        {
+            _ffiSemaphore.Release();
             if (SaveButton != null) SaveButton.IsEnabled = true;
         }
     }
@@ -333,7 +642,9 @@ public sealed partial class MainPage : Page
                             Width = anno.Width,
                             Height = anno.Height,
                             Content = anno.Content ?? "",
-                            ColorHex = anno.ColorHex
+                            ColorHex = anno.ColorHex,
+                            Thickness = anno.Thickness,
+                            RotationAngle = page.RotationAngle
                         };
 
                         foreach (var pt in anno.PointsCollection)
@@ -345,9 +656,15 @@ public sealed partial class MainPage : Page
                     }
                 }
 
+                var pageRotations = new Dictionary<int, double>();
+                foreach (var page in _pages)
+                {
+                    pageRotations[page.PageIndex] = page.RotationAngle;
+                }
+
                 // 2. Export using PdfExportService
                 var exportService = new Glance.Services.PdfExportService();
-                await exportService.ExportPdfWithAnnotationsAsync(_currentPdfPath, file.Path, savedList);
+                await exportService.ExportPdfWithAnnotationsAsync(_currentPdfPath, file.Path, savedList, pageRotations);
 
                 HasUnsavedChanges = false;
 
@@ -378,22 +695,58 @@ public sealed partial class MainPage : Page
         }
     }
 
+    private async Task CancelBackgroundRenderAsync()
+    {
+        var cts = _backgroundRenderCts;
+
+        if (cts != null)
+        {
+            try
+            {
+                cts.Cancel();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error cancelling CTS: {ex.Message}");
+            }
+        }
+
+        if (cts == _backgroundRenderCts) _backgroundRenderCts = null;
+        _backgroundRenderTask = null;
+
+        try
+        {
+            cts?.Dispose();
+        }
+        catch { }
+
+        await Task.CompletedTask;
+    }
+
     /// <summary>
     /// Render all remaining pages sequentially in background
     /// </summary>
-    private async Task RenderRemainingPagesAsync(PdfDocument pdfDocument, uint startPage)
+    private async Task RenderRemainingPagesAsync(PdfDocument pdfDocument, uint startPage, CancellationToken cancellationToken)
     {
         try
         {
             for (uint i = startPage; i < pdfDocument.PageCount; i++)
             {
-                // Add small delay to prevent UI lag
-                await Task.Delay(10);
+                if (cancellationToken.IsCancellationRequested) break;
 
-                await RenderPageAsync(pdfDocument, i);
+                // Add small delay to prevent UI lag
+                await Task.Delay(10, cancellationToken);
+
+                if (cancellationToken.IsCancellationRequested) break;
+
+                await RenderPageAsync(pdfDocument, i, cancellationToken);
             }
 
             System.Diagnostics.Debug.WriteLine("✓ All pages rendered");
+        }
+        catch (OperationCanceledException)
+        {
+            System.Diagnostics.Debug.WriteLine("Background rendering task cancelled.");
         }
         catch (Exception ex)
         {
@@ -404,12 +757,68 @@ public sealed partial class MainPage : Page
     /// <summary>
     /// Render a single page on demand (lazy loading)
     /// </summary>
-    private async Task RenderPageAsync(PdfDocument pdfDocument, uint pageIndex)
+    private async Task RenderPageAsync(PdfDocument pdfDocument, uint pageIndex, CancellationToken cancellationToken = default)
     {
-        if (pageIndex >= _pages.Count) return;
+        if (_isUnloading || pageIndex >= _pages.Count) return;
 
         try
         {
+            var renderService = _pdfRenderService;
+            if (renderService != null && !_isUnloading)
+            {
+                try
+                {
+                    if (pageIndex >= _pages.Count || _isUnloading) return;
+                    var pageVm = _pages[(int)pageIndex];
+                    uint width = (uint)(pageVm.PageWidth * 2.0);
+                    uint height = (uint)(pageVm.PageHeight * 2.0);
+                    
+                    if (cancellationToken.IsCancellationRequested || _isUnloading) return;
+                    
+                    byte[] pngBytes = await renderService.RenderPageAsync(pageIndex, width, height, 96.0f, cancellationToken);
+                    
+                    if (cancellationToken.IsCancellationRequested || _isUnloading || pageIndex >= _pages.Count) return;
+                    
+                    var rustStream = new InMemoryRandomAccessStream();
+                    using (var writer = new DataWriter(rustStream))
+                    {
+                        writer.WriteBytes(pngBytes);
+                        await writer.StoreAsync();
+                        await writer.FlushAsync();
+                    }
+                    
+                    if (_isUnloading || pageIndex >= _pages.Count) return;
+                    var rustBitmap = new BitmapImage();
+                    rustStream.Seek(0);
+                    await rustBitmap.SetSourceAsync(rustStream);
+                    
+                    if (_isUnloading || pageIndex >= _pages.Count) return;
+                    _pages[(int)pageIndex].ImageSource = rustBitmap;
+                    _pages[(int)pageIndex].IsLoading = false;
+                    
+                    if (pageIndex == 0 && !string.IsNullOrEmpty(_currentPdfPath) && !_isUnloading)
+                    {
+                        try
+                        {
+                            string safeName = _currentPdfPath.Replace(":", "_").Replace("\\", "_").Replace("/", "_");
+                            string thumbPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, $"thumb_{safeName}.png");
+                            using (var fileStream = File.Create(thumbPath))
+                            {
+                                fileStream.Write(pngBytes, 0, pngBytes.Length);
+                            }
+                        }
+                        catch { }
+                    }
+                    
+                    System.Diagnostics.Debug.WriteLine($"✓ Page {pageIndex} rendered using Rust PDFium");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Rust PDFium render failed, falling back to UWP: {ex.Message}");
+                }
+            }
+
             using PdfPage page = pdfDocument.GetPage(pageIndex);
 
             // Render page to stream
@@ -455,10 +864,22 @@ public sealed partial class MainPage : Page
 
     private async Task LoadPdfAsync(StorageFile file)
     {
+        if (file == null) return;
+
+        // Cancel background rendering FIRST to release the semaphore and prevent deadlocks!
+        if (_backgroundRenderCts != null)
+        {
+            try { _backgroundRenderCts.Cancel(); } catch { }
+        }
+
+        await _ffiSemaphore.WaitAsync();
         try
         {
+            // Cancel background rendering task if any is running
+            await CancelBackgroundRenderAsync();
             // Block all ScrollViewer layout and scroll sync events during loading
             _isScrollingProgrammatically = true;
+            _isUnloading = false;
 
             _pages.Clear();
             _annotationHistory.Clear();
@@ -468,161 +889,123 @@ public sealed partial class MainPage : Page
             _currentPdfPath = file.Path;
             HasUnsavedChanges = false;
 
-            // Hide welcome screen, show document panel
+            // Hide welcome screen, show document panel and home button
             WelcomePanel.Visibility = Visibility.Collapsed;
             SidebarSplitView.Visibility = Visibility.Visible;
             SaveButton.Visibility = Visibility.Visible;
+            if (HomeButton != null) HomeButton.Visibility = Visibility.Visible;
+            if (SplitViewToggleButton != null) SplitViewToggleButton.Visibility = Visibility.Visible;
 
-            // Try Rust backend first, fallback to Windows.Data.Pdf
-            bool usedRust = false;
-
+            // Initialize Rust PDF engine (Phase 4)
             try
             {
-                // Try Rust PDF engine (Phase 4)
                 _pdfRenderService?.Dispose();
                 _pdfRenderService = new PdfRenderService();
                 await _pdfRenderService.InitializeAsync(file.Path);
+                System.Diagnostics.Debug.WriteLine("✓ Rust PDF engine initialized for rendering");
+            }
+            catch (Exception ex)
+            {
+                _pdfRenderService = null;
+                System.Diagnostics.Debug.WriteLine($"Rust backend failed to initialize: {ex.Message}");
+            }
 
-                byte[] pngBytes = await _pdfRenderService.RenderPageAsync(0, 1200, 1560, 96.0f);
-
-                // Check if we got a real render (not the 1x1 placeholder)
-                if (pngBytes != null && pngBytes.Length > 1024)  // Real PNGs are > 1KB
+            // Always load structure with Windows.Data.Pdf (to get page metadata and dimensions)
+            try
+            {
+                using (var fileStream = await file.OpenAsync(FileAccessMode.Read))
                 {
-                    usedRust = true;
-                    System.Diagnostics.Debug.WriteLine("✓ Using Rust backend for rendering");
+                    var memStream = new InMemoryRandomAccessStream();
+                    await RandomAccessStream.CopyAsync(fileStream, memStream);
+                    memStream.Seek(0);
+                    _pdfDocument = await PdfDocument.LoadFromStreamAsync(memStream);
+                }
 
-                    var bitmap = new BitmapImage();
-                    using (var stream = new InMemoryRandomAccessStream())
-                    {
-                        await stream.WriteAsync(pngBytes.AsBuffer());
-                        stream.Seek(0);
-                        await bitmap.SetSourceAsync(stream);
-                    }
+                if (_pdfDocument == null)
+                {
+                    throw new Exception("Could not load PDF document structure");
+                }
 
+                System.Diagnostics.Debug.WriteLine($"✓ PDF loaded: {_pdfDocument.PageCount} pages");
+                _totalPages = _pdfDocument.PageCount;
+                TotalPagesText.Text = $"/ {_pdfDocument.PageCount}";
+
+                System.Diagnostics.Debug.WriteLine($"Creating placeholders for {_pdfDocument.PageCount} pages...");
+
+                for (uint i = 0; i < _pdfDocument.PageCount; i++)
+                {
+                    using PdfPage page = _pdfDocument.GetPage(i);
+
+                    // Create placeholder with page dimensions but no image yet (lazy rendering)
                     _pages.Add(new PdfPageViewModel
                     {
-                        ImageSource = bitmap,
-                        PageIndex = 0,
-                        PageWidth = 612.0,
-                        PageHeight = 792.0
+                        ImageSource = null,  // Will render on demand
+                        PageIndex = (int)i,
+                        PageWidth = page.Size.Width,
+                        PageHeight = page.Size.Height,
+                        IsLoading = true,
+                        AnnotationsBackground = (_currentMode == EditMode.Navigate) ? null : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent)
                     });
+                }
 
-                    try
+                System.Diagnostics.Debug.WriteLine($"✓ Placeholders created. PDF ready");
+
+                // Render first N pages immediately for smooth scrolling
+                uint pagesToRenderImmediately = Math.Min(10, _pdfDocument.PageCount);
+                System.Diagnostics.Debug.WriteLine($"Rendering first {pagesToRenderImmediately} pages...");
+
+                for (uint i = 0; i < pagesToRenderImmediately; i++)
+                {
+                    await RenderPageAsync(_pdfDocument, i);
+                }
+
+                System.Diagnostics.Debug.WriteLine($"✓ First {pagesToRenderImmediately} pages rendered");
+
+                // Start rendering remaining pages in background (non-blocking)
+                if (_pdfDocument.PageCount > pagesToRenderImmediately)
+                {
+                    _backgroundRenderCts = new CancellationTokenSource();
+                    System.Diagnostics.Debug.WriteLine("Starting background rendering of remaining pages...");
+                    _backgroundRenderTask = RenderRemainingPagesAsync(_pdfDocument, pagesToRenderImmediately, _backgroundRenderCts.Token);
+                }
+
+                // Generate thumbnail and add to recents list
+                try
+                {
+                    using PdfPage page = _pdfDocument.GetPage(0);
+                    var tempThumbStream = new InMemoryRandomAccessStream();
+                    await page.RenderToStreamAsync(tempThumbStream);
+                    
+                    string safeName = file.Path.Replace(":", "_").Replace("\\", "_").Replace("/", "_");
+                    string thumbPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, $"thumb_{safeName}.png");
+                    
+                    using (var outStream = File.Create(thumbPath))
                     {
-                        string safeName = file.Path.Replace(":", "_").Replace("\\", "_").Replace("/", "_");
-                        string thumbPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, $"thumb_{safeName}.png");
-                        File.WriteAllBytes(thumbPath, pngBytes);
-                        AddToRecentFiles(file.Path, file.Name, thumbPath);
+                        var buffer = new byte[4096];
+                        tempThumbStream.Seek(0);
+                        using (var readStream = tempThumbStream.AsStreamForRead())
+                        {
+                            int bytesRead;
+                            while ((bytesRead = await readStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                            {
+                                await outStream.WriteAsync(buffer, 0, bytesRead);
+                            }
+                        }
                     }
-                    catch { }
+
+                    AddToRecentFiles(file.Path, file.Name, thumbPath);
+                }
+                catch (Exception thumbEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to generate fallback thumbnail: {thumbEx.Message}");
+                    AddToRecentFiles(file.Path, file.Name, "");
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Rust backend failed: {ex.Message}");
-            }
-
-            // Fallback to Windows.Data.Pdf if Rust didn't work
-            if (!usedRust)
-            {
-                System.Diagnostics.Debug.WriteLine("⚠ Falling back to Windows.Data.Pdf (Rust Phase 4 not complete)");
-
-                try
-                {
-                    using (var fileStream = await file.OpenAsync(FileAccessMode.Read))
-                    {
-                        var memStream = new InMemoryRandomAccessStream();
-                        await RandomAccessStream.CopyAsync(fileStream, memStream);
-                        memStream.Seek(0);
-                        _pdfDocument = await PdfDocument.LoadFromStreamAsync(memStream);
-                    }
-
-                    if (_pdfDocument == null)
-                    {
-                        throw new Exception("Could not load PDF with either backend");
-                    }
-
-                    System.Diagnostics.Debug.WriteLine($"✓ PDF loaded: {_pdfDocument.PageCount} pages");
-                    _totalPages = _pdfDocument.PageCount;  // ⭐ FIX: Update total pages
-                    TotalPagesText.Text = $"/ {_pdfDocument.PageCount}";
-
-                    // LAZY LOADING: Create placeholders for all pages immediately (like Evince)
-                    // Don't render yet - just get metadata and show structure
-                    System.Diagnostics.Debug.WriteLine($"Creating placeholders for {_pdfDocument.PageCount} pages...");
-
-                    for (uint i = 0; i < _pdfDocument.PageCount; i++)
-                    {
-                        using PdfPage page = _pdfDocument.GetPage(i);
-
-                        // Create placeholder with page dimensions but no image yet
-                        _pages.Add(new PdfPageViewModel
-                        {
-                            ImageSource = null,  // No image yet, will render on demand
-                            PageIndex = (int)i,
-                            PageWidth = page.Size.Width,
-                            PageHeight = page.Size.Height,
-                            IsLoading = true
-                        });
-                    }
-
-                    System.Diagnostics.Debug.WriteLine($"✓ Placeholders created. PDF ready");
-
-                    // Render first N pages immediately for smooth scrolling
-                    uint pagesToRenderImmediately = Math.Min(10, _pdfDocument.PageCount);
-                    System.Diagnostics.Debug.WriteLine($"Rendering first {pagesToRenderImmediately} pages...");
-
-                    for (uint i = 0; i < pagesToRenderImmediately; i++)
-                    {
-                        await RenderPageAsync(_pdfDocument, i);
-                    }
-
-                    System.Diagnostics.Debug.WriteLine($"✓ First {pagesToRenderImmediately} pages rendered");
-
-                    // Start rendering remaining pages in background (non-blocking)
-                    if (_pdfDocument.PageCount > pagesToRenderImmediately)
-                    {
-                        System.Diagnostics.Debug.WriteLine("Starting background rendering of remaining pages...");
-                        _ = RenderRemainingPagesAsync(_pdfDocument, pagesToRenderImmediately);
-                    }
-
-                    // Generate thumbnail and add to recents list
-                    try
-                    {
-                        using PdfPage page = _pdfDocument.GetPage(0);
-                        var tempThumbStream = new InMemoryRandomAccessStream();
-                        await page.RenderToStreamAsync(tempThumbStream);
-                        
-                        string safeName = file.Path.Replace(":", "_").Replace("\\", "_").Replace("/", "_");
-                        string thumbPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, $"thumb_{safeName}.png");
-                        
-                        using (var outStream = File.Create(thumbPath))
-                        {
-                            var buffer = new byte[4096];
-                            tempThumbStream.Seek(0);
-                            using (var readStream = tempThumbStream.AsStreamForRead())
-                            {
-                                int bytesRead;
-                                while ((bytesRead = await readStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                                {
-                                    await outStream.WriteAsync(buffer, 0, bytesRead);
-                                }
-                            }
-                        }
-
-                        AddToRecentFiles(file.Path, file.Name, thumbPath);
-                    }
-                    catch (Exception thumbEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Failed to generate fallback thumbnail: {thumbEx.Message}");
-                        AddToRecentFiles(file.Path, file.Name, "");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"✗ Error in PDF loading: {ex.Message}");
-                    System.Diagnostics.Debug.WriteLine($"  Stack: {ex.StackTrace}");
-                    throw;
-                }
+                System.Diagnostics.Debug.WriteLine($"✗ Error in PDF loading: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"  Stack: {ex.StackTrace}");
+                throw;
             }
 
             // Load annotations if they exist for this PDF
@@ -648,6 +1031,7 @@ public sealed partial class MainPage : Page
         {
             // Re-enable ScrollViewer scroll sync events
             _isScrollingProgrammatically = false;
+            _ffiSemaphore.Release();
         }
     }
 
@@ -667,23 +1051,23 @@ public sealed partial class MainPage : Page
 
     private void PrevPage_Click(object sender, RoutedEventArgs e)
     {
-        if (_pdfRenderService != null && _currentPageIndex > 0)
+        if (_totalPages > 0 && _currentPageIndex > 0)
         {
             NavigateToPage(_currentPageIndex - 1);
         }
     }
-
+ 
     private void NextPage_Click(object sender, RoutedEventArgs e)
     {
-        if (_pdfRenderService != null && _currentPageIndex < _totalPages - 1)
+        if (_totalPages > 0 && _currentPageIndex < _totalPages - 1)
         {
             NavigateToPage(_currentPageIndex + 1);
         }
     }
-
-    private void NavigateToPage(int index)
+ 
+    private async void NavigateToPage(int index)
     {
-        if (index >= 0 && _pdfRenderService != null && index < _totalPages)
+        if (index >= 0 && _totalPages > 0 && index < _totalPages)
         {
             _currentPageIndex = index;
             
@@ -702,6 +1086,7 @@ public sealed partial class MainPage : Page
                 });
             }
             
+            await Task.Delay(500);
             _isScrollingProgrammatically = false;
         }
     }
@@ -766,19 +1151,33 @@ public sealed partial class MainPage : Page
     private void PdfScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
     {
         if (_isScrollingProgrammatically) return;
-        if (_pdfRenderService == null || _totalPages == 0) return;
+        if (_pdfRenderService == null || _totalPages == 0 || _pages.Count == 0) return;
 
         double offset = PdfScrollViewer.VerticalOffset;
 
         if (_totalPages > 0)
         {
-            // Standard letter height in points = 792, rendered at 2x
             double zoom = PdfScrollViewer.ZoomFactor;
-            // Get rendered height + StackLayout spacing (16) + item borders/margins (16)
-            double pageHeight = (792.0 * 2.0) * zoom;
-            double itemHeight = pageHeight + 32.0;
+            double currentOffset = offset / (zoom > 0 ? zoom : 1.0); // normalize offset to 100% zoom
+            
+            int activePageIndex = 0;
+            double accumulatedHeight = 16.0; // PagesRepeater top margin (16)
 
-            int activePageIndex = (int)Math.Round(offset / itemHeight);
+            for (int i = 0; i < _pages.Count; i++)
+            {
+                double pageHeight = _pages[i].PageHeight;
+                double itemHeight = pageHeight + 18.0; // Height of Border including thickness and margin
+
+                if (currentOffset < accumulatedHeight + itemHeight + 8.0) // Closer to this page than next (8.0 is half of spacing)
+                {
+                    activePageIndex = i;
+                    break;
+                }
+
+                accumulatedHeight += itemHeight + 16.0; // add item height + StackLayout spacing (16)
+                activePageIndex = i;
+            }
+
             activePageIndex = Math.Max(0, Math.Min(activePageIndex, (int)_totalPages - 1));
 
             if (activePageIndex != _currentPageIndex)
@@ -816,6 +1215,11 @@ public sealed partial class MainPage : Page
         SetEditMode(EditMode.Pen);
     }
 
+    private void EraserMode_Click(object sender, RoutedEventArgs e)
+    {
+        SetEditMode(EditMode.Eraser);
+    }
+
     private void SetEditMode(EditMode mode)
     {
         _currentMode = mode;
@@ -823,11 +1227,71 @@ public sealed partial class MainPage : Page
         HighlightModeButton.IsChecked = (mode == EditMode.Highlight);
         NoteModeButton.IsChecked = (mode == EditMode.Note);
         PenModeButton.IsChecked = (mode == EditMode.Pen);
+        if (EraserModeButton != null) EraserModeButton.IsChecked = (mode == EditMode.Eraser);
+
+        // Toggle annotations background to allow clicking notes and scrolling in Navigate mode
+        Microsoft.UI.Xaml.Media.Brush? bg = (mode == EditMode.Navigate)
+            ? null
+            : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        
+        foreach (var page in _pages)
+        {
+            page.AnnotationsBackground = bg;
+        }
 
         // Toggle visibility of the color selector panel for drawing modes
         bool showColors = (mode == EditMode.Highlight || mode == EditMode.Pen);
         ColorSelectorPanel.Visibility = showColors ? Visibility.Visible : Visibility.Collapsed;
         ColorSeparator.Visibility = showColors ? Visibility.Visible : Visibility.Collapsed;
+
+        // Toggle visibility of the brush settings panel
+        if (BrushSettingsPanel != null)
+        {
+            BrushSettingsPanel.Visibility = showColors ? Visibility.Visible : Visibility.Collapsed;
+            if (showColors)
+            {
+                ThicknessContainer.Visibility = (mode == EditMode.Pen) ? Visibility.Visible : Visibility.Collapsed;
+                OpacityContainer.Visibility = (mode == EditMode.Highlight) ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+    }
+
+    private string GetActiveColorHexWithOpacity()
+    {
+        string color = _activeColorHex;
+        if (string.IsNullOrEmpty(color)) color = "#FFFF00";
+        
+        string clean = color.Replace("#", "");
+        if (clean.Length == 8)
+        {
+            clean = clean.Substring(2); // Strip existing alpha
+        }
+        
+        if (_currentMode == EditMode.Highlight && OpacitySlider != null)
+        {
+            byte alpha = (byte)Math.Clamp(OpacitySlider.Value * 255.0 / 100.0, 10.0, 255.0);
+            return $"#{alpha:X2}{clean}";
+        }
+        else
+        {
+            return $"#FF{clean}";
+        }
+    }
+
+    private void ThicknessSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        if (ThicknessValueText != null)
+        {
+            ThicknessValueText.Text = $"{e.NewValue:0.0}px";
+        }
+    }
+
+    private void OpacitySlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        if (OpacityValueText != null)
+        {
+            OpacityValueText.Text = $"{e.NewValue:0}%";
+        }
     }
 
     private void Color_Click(object sender, RoutedEventArgs e)
@@ -854,6 +1318,130 @@ public sealed partial class MainPage : Page
         }
     }
 
+    private void SplitViewToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (SplitViewToggleButton == null) return;
+
+        if (SplitViewToggleButton.IsChecked == true)
+        {
+            // Open split view (50/50 columns)
+            SecondaryViewerColumn.Width = new GridLength(1, GridUnitType.Star);
+            SecondaryViewerContainer.Visibility = Visibility.Visible;
+            ViewerDivider.Visibility = Visibility.Visible;
+            PagesRepeaterRight.ItemsSource = _pagesRight;
+        }
+        else
+        {
+            // Close split view
+            SecondaryViewerColumn.Width = new GridLength(0);
+            SecondaryViewerContainer.Visibility = Visibility.Collapsed;
+            ViewerDivider.Visibility = Visibility.Collapsed;
+            _pagesRight.Clear();
+            if (SecondaryTitleText != null)
+            {
+                SecondaryTitleText.Text = Glance.Services.LocalizationService.Get("SideBySideComparer");
+            }
+        }
+    }
+
+    private void CloseSecondPdf_Click(object sender, RoutedEventArgs e)
+    {
+        if (SplitViewToggleButton != null)
+        {
+            SplitViewToggleButton.IsChecked = false;
+            SplitViewToggle_Click(this, new RoutedEventArgs());
+        }
+    }
+
+    private async void OpenSecondPdf_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker();
+        
+        var app = Application.Current as App;
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(app?.MainWindow);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+        picker.ViewMode = PickerViewMode.Thumbnail;
+        picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+        picker.FileTypeFilter.Add(".pdf");
+
+        StorageFile file = await picker.PickSingleFileAsync();
+        if (file != null)
+        {
+            await LoadSecondPdfAsync(file);
+        }
+    }
+
+    private async Task LoadSecondPdfAsync(StorageFile file)
+    {
+        try
+        {
+            SecondaryTitleText.Text = $"Cargando: {file.Name}...";
+            _pagesRight.Clear();
+
+            // Load into memory to avoid file lock
+            InMemoryRandomAccessStream memoryStream = new InMemoryRandomAccessStream();
+            using (var fileStream = await file.OpenAsync(FileAccessMode.Read))
+            {
+                await RandomAccessStream.CopyAsync(fileStream, memoryStream);
+            }
+            memoryStream.Seek(0);
+
+            var docRight = await PdfDocument.LoadFromStreamAsync(memoryStream);
+            
+            // Populate pages view model for right column
+            for (uint i = 0; i < docRight.PageCount; i++)
+            {
+                using (var page = docRight.GetPage(i))
+                {
+                    var size = page.Size;
+                    var pageVm = new PdfPageViewModel
+                    {
+                        PageIndex = (int)i,
+                        PageWidth = size.Width,
+                        PageHeight = size.Height
+                    };
+                    _pagesRight.Add(pageVm);
+                }
+            }
+
+            SecondaryTitleText.Text = file.Name;
+
+            // Render pages in background (non-blocking)
+            _ = RenderSecondPdfPagesAsync(docRight);
+        }
+        catch (Exception ex)
+        {
+            SecondaryTitleText.Text = "Error al cargar PDF";
+            System.Diagnostics.Debug.WriteLine($"Error loading second PDF: {ex.Message}");
+        }
+    }
+
+    private async Task RenderSecondPdfPagesAsync(PdfDocument doc)
+    {
+        try
+        {
+            for (int i = 0; i < _pagesRight.Count; i++)
+            {
+                var pageVm = _pagesRight[i];
+                using (var page = doc.GetPage((uint)i))
+                {
+                    InMemoryRandomAccessStream stream = new InMemoryRandomAccessStream();
+                    await page.RenderToStreamAsync(stream);
+                    
+                    var image = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+                    await image.SetSourceAsync(stream);
+                    
+                    pageVm.ImageSource = image;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error rendering second PDF pages: {ex.Message}");
+        }
+    }
+
     // Canvas Pointer Events for Drawing
     private void Canvas_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
@@ -866,6 +1454,16 @@ public sealed partial class MainPage : Page
         if (pageVm == null) return;
 
         var point = e.GetCurrentPoint(element).Position;
+
+        if (_currentMode == EditMode.Eraser)
+        {
+            _isErasing = true;
+            EraseAtPoint(pageVm, point);
+            element.CapturePointer(e.Pointer);
+            e.Handled = true;
+            return;
+        }
+
         HasUnsavedChanges = true;
 
         if (_currentMode == EditMode.Highlight)
@@ -880,7 +1478,7 @@ public sealed partial class MainPage : Page
                 Y = point.Y,
                 Width = 0,
                 Height = 0,
-                ColorHex = _activeColorHex
+                ColorHex = GetActiveColorHexWithOpacity()
             };
             pageVm.Annotations.Add(_activeHighlight);
             _annotationHistory.Add((pageVm, _activeHighlight));
@@ -910,7 +1508,8 @@ public sealed partial class MainPage : Page
                 Type = AnnotationType.Pen,
                 X = 0, // No translation needed for absolute polyline coordinates
                 Y = 0,
-                ColorHex = _activeColorHex
+                ColorHex = GetActiveColorHexWithOpacity(),
+                Thickness = ThicknessSlider != null ? ThicknessSlider.Value : 3.5
             };
             _activeHighlight.PointsCollection.Add(point);
             pageVm.Annotations.Add(_activeHighlight);
@@ -923,6 +1522,22 @@ public sealed partial class MainPage : Page
 
     private void Canvas_PointerMoved(object sender, PointerRoutedEventArgs e)
     {
+        if (_currentMode == EditMode.Eraser && _isErasing)
+        {
+            var element = sender as FrameworkElement;
+            if (element != null)
+            {
+                var pageVm = element.DataContext as PdfPageViewModel;
+                if (pageVm != null)
+                {
+                    var point = e.GetCurrentPoint(element).Position;
+                    EraseAtPoint(pageVm, point);
+                }
+            }
+            e.Handled = true;
+            return;
+        }
+
         if (_isDrawingHighlight && _activeHighlight != null)
         {
             var element = sender as FrameworkElement;
@@ -953,6 +1568,15 @@ public sealed partial class MainPage : Page
 
     private void Canvas_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        if (_currentMode == EditMode.Eraser && _isErasing)
+        {
+            _isErasing = false;
+            var element = sender as FrameworkElement;
+            element?.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+            return;
+        }
+
         if (_isDrawingHighlight)
         {
             _isDrawingHighlight = false;
@@ -963,6 +1587,61 @@ public sealed partial class MainPage : Page
             
             _ = SaveAnnotationsAsync();
             e.Handled = true;
+        }
+    }
+
+    private void EraseAtPoint(PdfPageViewModel pageVm, Point p)
+    {
+        AnnotationViewModel? toRemove = null;
+        
+        foreach (var anno in pageVm.Annotations)
+        {
+            if (anno.Type == AnnotationType.Highlight)
+            {
+                // Check if point is inside rectangle
+                if (p.X >= anno.X && p.X <= anno.X + anno.Width &&
+                    p.Y >= anno.Y && p.Y <= anno.Y + anno.Height)
+                {
+                    toRemove = anno;
+                    break;
+                }
+            }
+            else if (anno.Type == AnnotationType.Note)
+            {
+                // Check if point is near the comment icon (24px hit area)
+                double dist = Math.Sqrt(Math.Pow(p.X - anno.X, 2) + Math.Pow(p.Y - anno.Y, 2));
+                if (dist <= 16.0)
+                {
+                    toRemove = anno;
+                    break;
+                }
+            }
+            else if (anno.Type == AnnotationType.Pen)
+            {
+                // Check if point is near any point of the polyline
+                double threshold = Math.Max(anno.Thickness + 6.0, 10.0);
+                foreach (var pt in anno.PointsCollection)
+                {
+                    double dist = Math.Sqrt(Math.Pow(p.X - pt.X, 2) + Math.Pow(p.Y - pt.Y, 2));
+                    if (dist <= threshold)
+                    {
+                        toRemove = anno;
+                        break;
+                    }
+                }
+                if (toRemove != null) break;
+            }
+        }
+
+        if (toRemove != null)
+        {
+            pageVm.Annotations.Remove(toRemove);
+            HasUnsavedChanges = true;
+            
+            // Remove from history
+            _annotationHistory.RemoveAll(item => item.Annotation == toRemove);
+            
+            _ = SaveAnnotationsAsync();
         }
     }
 
@@ -1151,6 +1830,19 @@ public sealed partial class MainPage : Page
     {
         if (string.IsNullOrEmpty(_currentPdfPath) || _pages.Count == 0) return;
 
+        await _ffiSemaphore.WaitAsync();
+        try
+        {
+            await SaveAnnotationsInternalAsync();
+        }
+        finally
+        {
+            _ffiSemaphore.Release();
+        }
+    }
+
+    private async Task SaveAnnotationsInternalAsync()
+    {
         try
         {
             var savedList = new List<SavedAnnotation>();
@@ -1167,7 +1859,9 @@ public sealed partial class MainPage : Page
                         Width = anno.Width,
                         Height = anno.Height,
                         Content = anno.Content ?? "",
-                        ColorHex = anno.ColorHex
+                        ColorHex = anno.ColorHex,
+                        Thickness = anno.Thickness,
+                        RotationAngle = page.RotationAngle
                     };
 
                     foreach (var pt in anno.PointsCollection)
@@ -1219,7 +1913,8 @@ public sealed partial class MainPage : Page
                         Width = saved.Width,
                         Height = saved.Height,
                         Content = saved.Content,
-                        ColorHex = saved.ColorHex ?? "#FFFF00"
+                        ColorHex = saved.ColorHex ?? "#FFFF00",
+                        Thickness = saved.Thickness > 0 ? saved.Thickness : 3.5
                     };
 
                     if (saved.Points != null && saved.Points.Count > 0)
@@ -1249,6 +1944,217 @@ public sealed partial class MainPage : Page
         string localFolder = ApplicationData.Current.LocalFolder.Path;
         return Path.Combine(localFolder, $"{safeName}.json");
     }
+
+    // ========================================================================
+    // Search (Ctrl+F) Functions
+    // ========================================================================
+
+    private void Search_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        ShowSearch();
+        args.Handled = true;
+    }
+
+    private void ShowSearch()
+    {
+        SearchPanel.Visibility = Visibility.Visible;
+        SearchTextBox.Focus(FocusState.Programmatic);
+        SearchTextBox.SelectAll();
+    }
+
+    private void CloseSearch()
+    {
+        SearchPanel.Visibility = Visibility.Collapsed;
+        ClearSearchHighlights();
+        SearchTextBox.Text = "";
+        _searchMatches.Clear();
+        _currentMatchIndex = -1;
+    }
+
+    private void ClearSearchHighlights()
+    {
+        foreach (var page in _pages)
+        {
+            page.SearchHighlights.Clear();
+        }
+    }
+
+    private async Task PerformSearchAsync(string query)
+    {
+        ClearSearchHighlights();
+
+        if (string.IsNullOrWhiteSpace(query) || _pdfRenderService == null)
+        {
+            _searchMatches.Clear();
+            _currentMatchIndex = -1;
+            UpdateSearchStatus();
+            return;
+        }
+
+        try
+        {
+            string jsonResult = await _pdfRenderService.SearchTextAsync(query);
+            
+            var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            _searchMatches = System.Text.Json.JsonSerializer.Deserialize<List<SearchMatch>>(jsonResult, options) ?? new();
+
+            int totalRects = 0;
+            foreach (var match in _searchMatches)
+            {
+                var page = _pages.FirstOrDefault(p => p.PageIndex == match.PageIndex);
+                if (page != null)
+                {
+                    foreach (var rect in match.Rects)
+                    {
+                        var highlight = new SearchHighlightViewModel
+                        {
+                            X = rect.X * (96.0 / 72.0),
+                            Y = rect.Y * (96.0 / 72.0),
+                            Width = rect.Width * (96.0 / 72.0),
+                            Height = rect.Height * (96.0 / 72.0),
+                            IsCurrent = false
+                        };
+                        page.SearchHighlights.Add(highlight);
+                        totalRects++;
+                    }
+                }
+            }
+
+            if (totalRects > 0)
+            {
+                _currentMatchIndex = 0;
+                HighlightCurrentMatch(true);
+            }
+            else
+            {
+                _currentMatchIndex = -1;
+            }
+
+            UpdateSearchStatus();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error performing search: {ex.Message}");
+        }
+    }
+
+    private void HighlightCurrentMatch(bool scrollToMatch)
+    {
+        int currentIndex = 0;
+        SearchHighlightViewModel? targetHighlight = null;
+        int targetPageIndex = -1;
+
+        foreach (var page in _pages)
+        {
+            foreach (var h in page.SearchHighlights)
+            {
+                if (currentIndex == _currentMatchIndex)
+                {
+                    h.IsCurrent = true;
+                    targetHighlight = h;
+                    targetPageIndex = page.PageIndex;
+                }
+                else
+                {
+                    h.IsCurrent = false;
+                }
+                currentIndex++;
+            }
+        }
+
+        if (scrollToMatch && targetHighlight != null && targetPageIndex >= 0)
+        {
+            NavigateToPage(targetPageIndex);
+        }
+    }
+
+    private void UpdateSearchStatus()
+    {
+        if (SearchStatusText == null) return;
+        
+        int totalRects = _pages.Sum(p => p.SearchHighlights.Count);
+        if (totalRects == 0)
+        {
+            SearchStatusText.Text = Glance.Services.LocalizationService.IsSpanish ? "Sin resultados" : "No results";
+            if (SearchPrevButton != null) SearchPrevButton.IsEnabled = false;
+            if (SearchNextButton != null) SearchNextButton.IsEnabled = false;
+        }
+        else
+        {
+            SearchStatusText.Text = string.Format(Glance.Services.LocalizationService.Get("SearchStatus"), _currentMatchIndex + 1, totalRects);
+            if (SearchPrevButton != null) SearchPrevButton.IsEnabled = true;
+            if (SearchNextButton != null) SearchNextButton.IsEnabled = true;
+        }
+    }
+
+    private void SearchPrev_Click(object sender, RoutedEventArgs e)
+    {
+        int totalRects = _pages.Sum(p => p.SearchHighlights.Count);
+        if (totalRects == 0) return;
+
+        _currentMatchIndex = (_currentMatchIndex - 1 + totalRects) % totalRects;
+        HighlightCurrentMatch(true);
+        UpdateSearchStatus();
+    }
+
+    private void SearchNext_Click(object sender, RoutedEventArgs e)
+    {
+        int totalRects = _pages.Sum(p => p.SearchHighlights.Count);
+        if (totalRects == 0) return;
+
+        _currentMatchIndex = (_currentMatchIndex + 1) % totalRects;
+        HighlightCurrentMatch(true);
+        UpdateSearchStatus();
+    }
+
+    private void SearchClose_Click(object sender, RoutedEventArgs e)
+    {
+        CloseSearch();
+    }
+
+    private void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_searchDebounceTimer == null)
+        {
+            _searchDebounceTimer = new Microsoft.UI.Xaml.DispatcherTimer();
+            _searchDebounceTimer.Interval = TimeSpan.FromMilliseconds(300);
+            _searchDebounceTimer.Tick += async (s, args) =>
+            {
+                _searchDebounceTimer.Stop();
+                await PerformSearchAsync(SearchTextBox.Text);
+            };
+        }
+
+        _searchDebounceTimer.Stop();
+        _searchDebounceTimer.Start();
+    }
+
+    private async void SearchTextBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            e.Handled = true;
+            _searchDebounceTimer?.Stop(); // Cancel pending debounced search
+
+            int totalRects = _pages.Sum(p => p.SearchHighlights.Count);
+            if (totalRects > 0)
+            {
+                _currentMatchIndex = (_currentMatchIndex + 1) % totalRects;
+                HighlightCurrentMatch(true);
+                UpdateSearchStatus();
+            }
+            else
+            {
+                await PerformSearchAsync(SearchTextBox.Text);
+            }
+        }
+        else if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            e.Handled = true;
+            _searchDebounceTimer?.Stop(); // Cancel pending debounced search
+            CloseSearch();
+        }
+    }
 }
 
 public class RecentDocumentViewModel
@@ -1274,6 +2180,13 @@ public class PdfPageViewModel : INotifyPropertyChanged
     private int _pageIndex;
     private ImageSource? _imageSource;
     private bool _isLoading = false;
+    private Microsoft.UI.Xaml.Media.Brush? _annotationsBackground = null;
+
+    public Microsoft.UI.Xaml.Media.Brush? AnnotationsBackground
+    {
+        get => _annotationsBackground;
+        set => SetProperty(ref _annotationsBackground, value);
+    }
 
     public ImageSource? ImageSource
     {
@@ -1319,6 +2232,7 @@ public class PdfPageViewModel : INotifyPropertyChanged
 
     public string PageNumberText => $"Página {PageIndex + 1}";
     public ObservableCollection<AnnotationViewModel> Annotations { get; set; } = new();
+    public ObservableCollection<SearchHighlightViewModel> SearchHighlights { get; set; } = new();
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -1353,6 +2267,8 @@ public class SavedAnnotation
     public string Content { get; set; } = "";
     public string ColorHex { get; set; } = "#FFFF00";
     public List<SavedPoint> Points { get; set; } = new();
+    public double Thickness { get; set; } = 3.5;
+    public double RotationAngle { get; set; } = 0.0;
 }
 
 public class AnnotationViewModel : INotifyPropertyChanged
@@ -1363,6 +2279,7 @@ public class AnnotationViewModel : INotifyPropertyChanged
     private double _height;
     private string _content = "";
     private string _colorHex = "#FFFF00";
+    private double _thickness = 3.5;
     private PointCollection _pointsCollection = new();
 
     public AnnotationType Type { get; set; }
@@ -1430,6 +2347,22 @@ public class AnnotationViewModel : INotifyPropertyChanged
         set => SetProperty(ref _pointsCollection, value);
     }
 
+    public double Thickness
+    {
+        get => _thickness;
+        set
+        {
+            if (SetProperty(ref _thickness, value))
+            {
+                if (MainPage.Current != null)
+                {
+                    MainPage.Current.HasUnsavedChanges = true;
+                }
+                _ = MainPage.Current?.SaveAnnotationsAsync();
+            }
+        }
+    }
+
     public Brush ColorBrush
     {
         get
@@ -1439,11 +2372,9 @@ public class AnnotationViewModel : INotifyPropertyChanged
                 string hex = _colorHex.Replace("#", "");
                 if (Type == AnnotationType.Highlight)
                 {
-                    // Semi-transparent alpha (50 hex = 80 dec / 255 = 31% opacity)
+                    // Use custom alpha if 8 characters (AARRGGBB), otherwise default to 31% opacity (50 hex)
                     if (hex.Length == 6)
                         hex = "50" + hex;
-                    else if (hex.Length == 8)
-                        hex = "50" + hex.Substring(2);
                 }
                 else
                 {
@@ -1487,4 +2418,62 @@ public class AnnotationViewModel : INotifyPropertyChanged
         }
         return true;
     }
+}
+
+public class SearchHighlightViewModel : INotifyPropertyChanged
+{
+    private double _x;
+    private double _y;
+    private double _width;
+    private double _height;
+    private bool _isCurrent;
+
+    public double X { get => _x; set => SetProperty(ref _x, value); }
+    public double Y { get => _y; set => SetProperty(ref _y, value); }
+    public double Width { get => _width; set => SetProperty(ref _width, value); }
+    public double Height { get => _height; set => SetProperty(ref _height, value); }
+    public bool IsCurrent
+    {
+        get => _isCurrent;
+        set
+        {
+            if (SetProperty(ref _isCurrent, value))
+            {
+                OnPropertyChanged(nameof(HighlightBrush));
+            }
+        }
+    }
+
+    public Microsoft.UI.Xaml.Media.Brush HighlightBrush => IsCurrent
+        ? new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange) { Opacity = 0.5 }
+        : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Yellow) { Opacity = 0.45 };
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    protected bool SetProperty<T>(ref T storage, T value, [CallerMemberName] string? propertyName = null)
+    {
+        if (Equals(storage, value)) return false;
+        storage = value;
+        OnPropertyChanged(propertyName);
+        return true;
+    }
+
+    protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+}
+
+public class SearchMatch
+{
+    public uint PageIndex { get; set; }
+    public List<MatchRect> Rects { get; set; } = new();
+}
+
+public class MatchRect
+{
+    public double X { get; set; }
+    public double Y { get; set; }
+    public double Width { get; set; }
+    public double Height { get; set; }
 }

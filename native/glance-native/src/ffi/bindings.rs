@@ -75,10 +75,9 @@ pub extern "C" fn pdf_render_page(
 
     match engine_ref.render_page_to_png(opts_ref.page_index, opts_ref.width, opts_ref.height, opts_ref.dpi) {
         Ok(png_bytes) => {
-            let len = png_bytes.len() as u64;
-            let mut vec = png_bytes;
-            let ptr = vec.as_mut_ptr();
-            std::mem::forget(vec); // Caller must free with memory_free
+            let boxed_slice = png_bytes.into_boxed_slice();
+            let len = boxed_slice.len() as u64;
+            let ptr = Box::into_raw(boxed_slice) as *mut u8;
 
             unsafe {
                 *out_png_data = ptr;
@@ -98,6 +97,73 @@ pub extern "C" fn pdf_render_page(
             data_ptr: std::ptr::null_mut(),
             data_len: 0,
         },
+    }
+}
+
+/// Search for text across document pages and return character bounds as a JSON string Response
+#[no_mangle]
+pub extern "C" fn pdf_search_text(
+    engine: *mut PdfEngine,
+    query: *const u8,
+    out_json_data: *mut *mut u8,
+    out_json_len: *mut u64,
+) -> Response {
+    if engine.is_null() || query.is_null() || out_json_data.is_null() || out_json_len.is_null() {
+        return Response {
+            success: false,
+            error_msg: crate::utils::error::make_error_string("Invalid parameters"),
+            data_ptr: std::ptr::null_mut(),
+            data_len: 0,
+        };
+    }
+
+    let engine_ref = unsafe { &*engine };
+
+    let query_str = match crate::ffi::marshalling::c_string_to_rust(query) {
+        Ok(s) => s,
+        Err(e) => {
+            return Response {
+                success: false,
+                error_msg: crate::utils::error::make_error_string(&e),
+                data_ptr: std::ptr::null_mut(),
+                data_len: 0,
+            };
+        }
+    };
+
+    match engine_ref.search_text(&query_str) {
+        Ok(matches) => {
+            match serde_json::to_string(&matches) {
+                Ok(json_str) => {
+                    let len = json_str.len() as u64;
+                    let data_ptr = crate::ffi::marshalling::rust_string_to_c(&json_str);
+                    
+                    unsafe {
+                        *out_json_data = data_ptr;
+                        *out_json_len = len;
+                    }
+
+                    Response {
+                        success: true,
+                        error_msg: std::ptr::null(),
+                        data_ptr: std::ptr::null_mut(),
+                        data_len: 0,
+                    }
+                }
+                Err(e) => Response {
+                    success: false,
+                    error_msg: crate::utils::error::make_error_string(&format!("Serialization error: {}", e)),
+                    data_ptr: std::ptr::null_mut(),
+                    data_len: 0,
+                }
+            }
+        }
+        Err(e) => Response {
+            success: false,
+            error_msg: crate::utils::error::make_error_string(&e),
+            data_ptr: std::ptr::null_mut(),
+            data_len: 0,
+        }
     }
 }
 
@@ -293,12 +359,20 @@ pub extern "C" fn annotations_process(
 // ============================================================================
 
 /// Free memory allocated by Rust and returned to C#
+/// If len is 0, ptr is treated as a C-style null-terminated string and freed using CString.
+/// If len > 0, ptr is treated as a boxed slice of bytes (Box<[u8]>) and freed using Box.
 #[no_mangle]
-pub extern "C" fn memory_free(ptr: *mut u8) {
+pub extern "C" fn memory_free(ptr: *mut u8, len: u64) {
     if !ptr.is_null() {
         unsafe {
-            // Reconstruct Vec to let it drop and deallocate
-            drop(Vec::from_raw_parts(ptr, 0, 1024));
+            if len == 0 {
+                // Free as null-terminated CString
+                let _ = std::ffi::CString::from_raw(ptr as *mut std::os::raw::c_char);
+            } else {
+                // Free as boxed slice
+                let slice = std::slice::from_raw_parts_mut(ptr, len as usize);
+                let _ = Box::from_raw(slice);
+            }
         }
     }
 }

@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 
-namespace FluentPdfViewer.Interop;
+namespace Glance.Interop;
 
 /// <summary>
 /// P/Invoke wrapper for Rust FFI functions in glance_native.dll
@@ -141,6 +141,25 @@ public static class GlanceNative
         out ulong outPngLen
     );
 
+    /// <summary>
+    /// Search for text occurrences across the document pages.
+    ///
+    /// Parameters:
+    /// - engine: Pointer from pdf_engine_create()
+    /// - query: Text string to search for (UTF-8)
+    /// - outJsonData: Receives pointer to JSON string (must free with memory_free())
+    /// - outJsonLen: Receives length of JSON data
+    ///
+    /// Returns: Response struct with success flag
+    /// </summary>
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern Response pdf_search_text(
+        IntPtr engine,
+        string query,
+        out IntPtr outJsonData,
+        out ulong outJsonLen
+    );
+
     // ========================================================================
     // Annotation Functions (Phase 2-3)
     // ========================================================================
@@ -188,7 +207,7 @@ public static class GlanceNative
     /// MUST be called for all non-null pointers returned in Response.error_msg or Response.data_ptr.
     /// </summary>
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    public static extern void memory_free(IntPtr ptr);
+    public static extern void memory_free(IntPtr ptr, ulong len = 0);
 
     // ========================================================================
     // Test Functions (Phase 1 only)

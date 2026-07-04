@@ -2,7 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentPdfViewer.Interop;
+using Glance.Interop;
 
 namespace Glance.Services;
 
@@ -14,6 +14,7 @@ public class PdfRenderService : IDisposable
 {
     private IntPtr _pdfEngineHandle = IntPtr.Zero;
     private bool _disposed = false;
+    private readonly SemaphoreSlim _ffiLock = new(1, 1);
 
     /// <summary>
     /// Initialize PDF renderer for a given PDF file path.
@@ -35,16 +36,24 @@ public class PdfRenderService : IDisposable
             throw new InvalidOperationException("PDF engine already initialized. Dispose first to initialize a new file.");
         }
 
-        await AsyncBridge.RunNativeAsync(() =>
+        await _ffiLock.WaitAsync(cancellationToken);
+        try
         {
-            _pdfEngineHandle = GlanceNative.pdf_engine_create(pdfFilePath);
-            if (_pdfEngineHandle == IntPtr.Zero)
+            await AsyncBridge.RunNativeAsync(() =>
             {
-                throw new InvalidOperationException($"Failed to initialize PDF engine for '{pdfFilePath}'");
-            }
+                _pdfEngineHandle = GlanceNative.pdf_engine_create(pdfFilePath);
+                if (_pdfEngineHandle == IntPtr.Zero)
+                {
+                    throw new InvalidOperationException($"Failed to initialize PDF engine for '{pdfFilePath}'");
+                }
 
-            System.Diagnostics.Debug.WriteLine($"✓ PDF engine initialized for '{pdfFilePath}'");
-        }, cancellationToken);
+                System.Diagnostics.Debug.WriteLine($"✓ PDF engine initialized for '{pdfFilePath}'");
+            }, cancellationToken);
+        }
+        finally
+        {
+            _ffiLock.Release();
+        }
     }
 
     /// <summary>
@@ -74,64 +83,148 @@ public class PdfRenderService : IDisposable
             throw new ArgumentException("Width and height must be greater than zero");
         }
 
-        return await AsyncBridge.RunNativeAsync(() =>
+        await _ffiLock.WaitAsync(cancellationToken);
+        try
         {
-            var opts = new GlanceNative.RenderOptions
+            return await AsyncBridge.RunNativeAsync(() =>
             {
-                PageIndex = pageIndex,
-                Width = width,
-                Height = height,
-                Dpi = dpi
-            };
-
-            IntPtr pngDataPtr = IntPtr.Zero;
-            ulong pngDataLen = 0;
-
-            try
-            {
-                var response = GlanceNative.pdf_render_page(
-                    _pdfEngineHandle,
-                    ref opts,
-                    out pngDataPtr,
-                    out pngDataLen);
-
-                if (!response.Success)
+                var opts = new GlanceNative.RenderOptions
                 {
-                    string errorMsg = response.ErrorMsg != IntPtr.Zero
-                        ? Marshal.PtrToStringAnsi(response.ErrorMsg) ?? "Unknown error"
-                        : "Unknown error (null error message)";
+                    PageIndex = pageIndex,
+                    Width = width,
+                    Height = height,
+                    Dpi = dpi
+                };
 
-                    // Free error message
-                    if (response.ErrorMsg != IntPtr.Zero)
+                IntPtr pngDataPtr = IntPtr.Zero;
+                ulong pngDataLen = 0;
+
+                try
+                {
+                    var response = GlanceNative.pdf_render_page(
+                        _pdfEngineHandle,
+                        ref opts,
+                        out pngDataPtr,
+                        out pngDataLen);
+
+                    if (!response.Success)
                     {
-                        GlanceNative.memory_free(response.ErrorMsg);
+                        string errorMsg = response.ErrorMsg != IntPtr.Zero
+                            ? Marshal.PtrToStringAnsi(response.ErrorMsg) ?? "Unknown error"
+                            : "Unknown error (null error message)";
+
+                        // Free error message
+                        if (response.ErrorMsg != IntPtr.Zero)
+                        {
+                            GlanceNative.memory_free(response.ErrorMsg);
+                        }
+
+                        throw new InvalidOperationException(
+                            $"Failed to render page {pageIndex}: {errorMsg}");
                     }
 
-                    throw new InvalidOperationException(
-                        $"Failed to render page {pageIndex}: {errorMsg}");
-                }
+                    // Copy PNG data from unmanaged memory
+                    byte[] pngBytes = new byte[pngDataLen];
+                    if (pngDataPtr != IntPtr.Zero && pngDataLen > 0)
+                    {
+                        Marshal.Copy(pngDataPtr, pngBytes, 0, (int)pngDataLen);
+                    }
 
-                // Copy PNG data from unmanaged memory
-                byte[] pngBytes = new byte[pngDataLen];
-                if (pngDataPtr != IntPtr.Zero && pngDataLen > 0)
+                    System.Diagnostics.Debug.WriteLine(
+                        $"✓ Page {pageIndex} rendered to PNG ({pngDataLen} bytes, {width}x{height}px)");
+
+                    return pngBytes;
+                }
+                finally
                 {
-                    Marshal.Copy(pngDataPtr, pngBytes, 0, (int)pngDataLen);
+                    // Free PNG data (CRITICAL)
+                    if (pngDataPtr != IntPtr.Zero)
+                    {
+                        GlanceNative.memory_free(pngDataPtr, pngDataLen);
+                    }
                 }
+            }, cancellationToken);
+        }
+        finally
+        {
+            _ffiLock.Release();
+        }
+    }
 
-                System.Diagnostics.Debug.WriteLine(
-                    $"✓ Page {pageIndex} rendered to PNG ({pngDataLen} bytes, {width}x{height}px)");
+    /// <summary>
+    /// Search for text occurrences across the document pages.
+    /// </summary>
+    /// <param name="query">Text query to search for</param>
+    /// <param name="cancellationToken">Optional cancellation token</param>
+    /// <returns>JSON string containing search matches with coordinates</returns>
+    /// <exception cref="InvalidOperationException">If PDF engine is not initialized or search fails</exception>
+    public async Task<string> SearchTextAsync(
+        string query,
+        CancellationToken cancellationToken = default)
+    {
+        if (_pdfEngineHandle == IntPtr.Zero)
+        {
+            throw new InvalidOperationException("PDF engine not initialized. Call InitializeAsync first.");
+        }
 
-                return pngBytes;
-            }
-            finally
+        if (string.IsNullOrEmpty(query))
+        {
+            return "[]";
+        }
+
+        await _ffiLock.WaitAsync(cancellationToken);
+        try
+        {
+            return await AsyncBridge.RunNativeAsync(() =>
             {
-                // Free PNG data (CRITICAL)
-                if (pngDataPtr != IntPtr.Zero)
+                IntPtr jsonDataPtr = IntPtr.Zero;
+                ulong jsonDataLen = 0;
+
+                try
                 {
-                    GlanceNative.memory_free(pngDataPtr);
+                    var response = GlanceNative.pdf_search_text(
+                        _pdfEngineHandle,
+                        query,
+                        out jsonDataPtr,
+                        out jsonDataLen);
+
+                    if (!response.Success)
+                    {
+                        string errorMsg = response.ErrorMsg != IntPtr.Zero
+                            ? Marshal.PtrToStringAnsi(response.ErrorMsg) ?? "Unknown error"
+                            : "Unknown error";
+
+                        if (response.ErrorMsg != IntPtr.Zero)
+                        {
+                            GlanceNative.memory_free(response.ErrorMsg);
+                        }
+
+                        throw new InvalidOperationException($"Search failed: {errorMsg}");
+                    }
+
+                    // Convert JSON data from unmanaged memory
+                    string jsonStr = "[]";
+                    if (jsonDataPtr != IntPtr.Zero && jsonDataLen > 0)
+                    {
+                        jsonStr = Marshal.PtrToStringAnsi(jsonDataPtr) ?? "[]";
+                    }
+
+                    return jsonStr;
                 }
-            }
-        }, cancellationToken);
+                finally
+                {
+                    // Free JSON data (CRITICAL)
+                    if (jsonDataPtr != IntPtr.Zero)
+                    {
+                        GlanceNative.memory_free(jsonDataPtr);
+                    }
+                }
+            }, cancellationToken);
+        }
+        finally
+        {
+            _ffiLock.Release();
+        }
     }
 
     /// <summary>
@@ -141,13 +234,23 @@ public class PdfRenderService : IDisposable
     {
         if (_disposed) return;
 
-        if (_pdfEngineHandle != IntPtr.Zero)
+        try
         {
-            GlanceNative.pdf_engine_destroy(_pdfEngineHandle);
-            _pdfEngineHandle = IntPtr.Zero;
-            System.Diagnostics.Debug.WriteLine("✓ PDF engine destroyed");
+            _ffiLock.Wait();
+            if (_pdfEngineHandle != IntPtr.Zero)
+            {
+                GlanceNative.pdf_engine_destroy(_pdfEngineHandle);
+                _pdfEngineHandle = IntPtr.Zero;
+                System.Diagnostics.Debug.WriteLine("✓ PDF engine destroyed");
+            }
+        }
+        catch { }
+        finally
+        {
+            try { _ffiLock.Release(); } catch { }
         }
 
+        _ffiLock.Dispose();
         _disposed = true;
     }
 }

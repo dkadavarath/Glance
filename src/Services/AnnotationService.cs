@@ -2,7 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentPdfViewer.Interop;
+using Glance.Interop;
 
 namespace Glance.Services;
 

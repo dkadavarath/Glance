@@ -3,7 +3,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
-    <RootNamespace>FluentPdfViewer</RootNamespace>
+    <RootNamespace>Glance</RootNamespace>
     <AssemblyName>Glance</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x86;x64;ARM64</Platforms>
@@ -94,18 +94,43 @@
     <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(BuildScriptPath)&quot; -Configuration $(Configuration) -Platforms x64" ContinueOnError="true" />
   </Target>
 
-  <!-- Include Native DLL in Output -->
+  <!-- Include Native DLLs in Output -->
   <ItemGroup>
     <!-- Copy from Rust build directory to C# output directory -->
     <Content Include="..\native\glance-native\target\release\glance_native.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>glance_native.dll</Link>
     </Content>
+    <Content Include="pdfium.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>pdfium.dll</Link>
+    </Content>
   </ItemGroup>
 
-  <!-- Post-build: Ensure DLL is in the exe directory -->
+  <!-- Post-build: Ensure DLLs are in the exe directory -->
   <Target Name="CopyNativeDll" AfterTargets="Build">
     <Copy SourceFiles="..\native\glance-native\target\release\glance_native.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
-    <Message Text="Copied glance_native.dll to $(OutputPath)" Importance="High" />
+    <Copy SourceFiles="pdfium.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Message Text="Copied native DLLs to $(OutputPath)" Importance="High" />
+  </Target>
+
+  <!-- Exclude testing assets from final build and packaging to pass WACK -->
+  <Target Name="ExcludePdfSharpQuality" AfterTargets="Build;Publish;CopyFilesToOutputDirectory">
+    <Delete Files="$(OutputPath)PdfSharp.Quality.dll" Condition="Exists('$(OutputPath)PdfSharp.Quality.dll')" />
+    <Delete Files="$(PublishDir)PdfSharp.Quality.dll" Condition="Exists('$(PublishDir)PdfSharp.Quality.dll') and '$(PublishDir)' != ''" />
+  </Target>
+
+  <Target Name="ExcludePdfSharpQualityFromPayload" AfterTargets="GetPackagingOutputs">
+    <ItemGroup>
+      <PackagingOutputs Remove="@(PackagingOutputs)" Condition="$([System.String]::new('%(Identity)').Contains('PdfSharp.Quality'))" />
+      <AppxPackagePayload Remove="@(AppxPackagePayload)" Condition="$([System.String]::new('%(Identity)').Contains('PdfSharp.Quality'))" />
+      <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)" Condition="$([System.String]::new('%(Identity)').Contains('PdfSharp.Quality'))" />
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="$([System.String]::new('%(Identity)').Contains('PdfSharp.Quality'))" />
+      <RuntimeCopyLocalItems Remove="@(RuntimeCopyLocalItems)" Condition="$([System.String]::new('%(Identity)').Contains('PdfSharp.Quality'))" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="PrintPackagingOutputs" AfterTargets="ExcludePdfSharpQualityFromPayload">
+    <WriteLinesToFile File="$(MSBuildProjectDirectory)\packaging_outputs.txt" Lines="@(PackagingOutputs->'%(Identity) = %(TargetPath)')" Overwrite="true" />
   </Target>
 </Project>

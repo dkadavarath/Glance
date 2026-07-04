@@ -63,12 +63,12 @@ fn is_valid_hex_color(hex: &str) -> bool {
         return false;
     }
 
-    // Must be #RRGGBB (7 chars total)
-    if hex.len() != 7 {
+    // Must be #RRGGBB (7 chars) or #AARRGGBB (9 chars)
+    if hex.len() != 7 && hex.len() != 9 {
         return false;
     }
 
-    // Check if remaining 6 chars are hex digits
+    // Check if remaining chars are hex digits
     hex[1..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
@@ -100,6 +100,8 @@ mod tests {
             color_hex: "#FFFF00".to_string(),
             content: "test".to_string(),
             points: vec![],
+            thickness: 0.0,
+            rotation_angle: 0.0,
         };
 
         assert!(validate_annotation(&annot).is_ok());
@@ -117,6 +119,8 @@ mod tests {
             color_hex: "#FFFF00".to_string(),
             content: "test note".to_string(),
             points: vec![],
+            thickness: 0.0,
+            rotation_angle: 0.0,
         };
         assert!(validate_annotation(&note).is_ok());
 
@@ -130,6 +134,8 @@ mod tests {
             color_hex: "#FF0000".to_string(),
             content: "".to_string(),
             points: vec![],
+            thickness: 0.0,
+            rotation_angle: 0.0,
         };
         assert!(validate_annotation(&pen).is_ok());
     }
@@ -146,6 +152,8 @@ mod tests {
             color_hex: "#FFFF00".to_string(),
             content: "test".to_string(),
             points: vec![],
+            thickness: 0.0,
+            rotation_angle: 0.0,
         };
 
         assert!(validate_annotation(&annot).is_err());
@@ -163,6 +171,8 @@ mod tests {
             color_hex: "FFFF00".to_string(), // Missing #
             content: "test".to_string(),
             points: vec![],
+            thickness: 0.0,
+            rotation_angle: 0.0,
         };
 
         assert!(validate_annotation(&annot).is_err());

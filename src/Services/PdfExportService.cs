@@ -6,13 +6,17 @@ using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
 using PdfSharp.Drawing;
 using PdfSharp.Pdf.Annotations;
-using FluentPdfViewer;
+using Glance;
 
 namespace Glance.Services;
 
 public class PdfExportService
 {
-    public async Task ExportPdfWithAnnotationsAsync(string inputPdfPath, string outputPdfPath, List<SavedAnnotation> annotations)
+    public async Task ExportPdfWithAnnotationsAsync(
+        string inputPdfPath, 
+        string outputPdfPath, 
+        List<SavedAnnotation> annotations,
+        Dictionary<int, double>? pageRotations = null)
     {
         await Task.Run(() =>
         {
@@ -25,6 +29,17 @@ public class PdfExportService
 
             using (PdfDocument document = PdfReader.Open(inputPdfPath, PdfDocumentOpenMode.Modify))
             {
+                // First, permanently apply any user-requested page rotations to the PDF file itself
+                for (int i = 0; i < document.Pages.Count; i++)
+                {
+                    PdfPage p = document.Pages[i];
+                    if (pageRotations != null && pageRotations.TryGetValue(i, out double userRot))
+                    {
+                        int nativeRotation = p.Rotate;
+                        p.Rotate = (nativeRotation + (int)userRot) % 360;
+                    }
+                }
+
                 // Group annotations by page index
                 var annotationsByPage = new Dictionary<int, List<SavedAnnotation>>();
                 foreach (var anno in annotations)
@@ -42,66 +57,169 @@ public class PdfExportService
                     if (pageIndex < 0 || pageIndex >= document.Pages.Count) continue;
 
                     PdfPage page = document.Pages[pageIndex];
+                    int currentRotation = page.Rotate;
 
-                    // XGraphics allows drawing directly on the PDF page graphics context
-                    using (XGraphics gfx = XGraphics.FromPdfPage(page))
+                    // Temporarily reset rotation to 0 to draw on unrotated physical page coordinates
+                    page.Rotate = 0;
+
+                    try
                     {
-                        foreach (var anno in entry.Value)
+                        double cropXOffset = 0;
+                        double cropYOffset = 0;
+                        double W_c = page.Width.Point;
+                        double H_c = page.Height.Point;
+
+                        try
                         {
-                            if (anno.Type == AnnotationType.Highlight)
+                            if (page.Elements.ContainsKey("/CropBox") && page.CropBox != null)
                             {
-                                XColor color = ParseColor(anno.ColorHex, 0.31); // 31% opacity for highlight
-                                XBrush brush = new XSolidBrush(color);
-                                gfx.DrawRectangle(brush, anno.X, anno.Y, anno.Width, anno.Height);
+                                var cropBox = page.CropBox;
+                                cropXOffset = cropBox.X1;
+                                cropYOffset = page.MediaBox.Height - cropBox.Y2;
+                                W_c = cropBox.X2 - cropBox.X1;
+                                H_c = cropBox.Y2 - cropBox.Y1;
                             }
-                            else if (anno.Type == AnnotationType.Pen && anno.Points.Count > 1)
-                            {
-                                XColor color = ParseColor(anno.ColorHex, 1.0); // Solid color for pen drawing
-                                XPen pen = new XPen(color, 3.5);
-                                pen.LineCap = XLineCap.Round;
-                                pen.LineJoin = XLineJoin.Round;
+                        }
+                        catch
+                        {
+                            W_c = page.Width.Point;
+                            H_c = page.Height.Point;
+                        }
 
-                                for (int i = 0; i < anno.Points.Count - 1; i++)
-                                {
-                                    gfx.DrawLine(pen, anno.Points[i].X, anno.Points[i].Y,
-                                                     anno.Points[i + 1].X, anno.Points[i + 1].Y);
-                                }
-                            }
-                            else if (anno.Type == AnnotationType.Note)
+                        // XGraphics allows drawing directly on the PDF page graphics context
+                        using (XGraphics gfx = XGraphics.FromPdfPage(page))
+                        {
+                            foreach (var anno in entry.Value)
                             {
-                                // Draw a comment icon on the page directly (as a visual fallback)
-                                try
-                                {
-                                    XFont font = new XFont("Segoe UI Emoji", 14);
-                                    gfx.DrawString("💬", font, XBrushes.DarkOrange, anno.X - 8, anno.Y + 8);
-                                }
-                                catch { }
+                                int totalRotation = currentRotation;
 
-                                // Add a native PDF text annotation
-                                try
+                                if (anno.Type == AnnotationType.Highlight)
                                 {
-                                    PdfTextAnnotation textAnnot = new PdfTextAnnotation();
-                                    textAnnot.Title = "Reader's Note";
-                                    textAnnot.Contents = anno.Content;
-                                    
-                                    // Y coordinate in PDF annotations is bottom-up, so invert it
-                                    double pdfY = page.Height.Point - anno.Y;
-                                    textAnnot.Rectangle = new PdfRectangle(new XRect(anno.X - 8, pdfY - 16, 24, 24));
-                                    textAnnot.Icon = PdfTextAnnotationIcon.Comment;
-                                    page.Annotations.Add(textAnnot);
+                                    XColor color = ParseColor(anno.ColorHex, 0.31); // 31% opacity for highlight
+                                    XBrush brush = new XSolidBrush(color);
+                                    XRect physicalRect = MapRectToPhysical(anno.X * 0.75, anno.Y * 0.75, anno.Width * 0.75, anno.Height * 0.75, totalRotation, W_c, H_c, cropXOffset, cropYOffset);
+                                    gfx.DrawRectangle(brush, physicalRect);
                                 }
-                                catch (Exception ex)
+                                else if (anno.Type == AnnotationType.Pen && anno.Points.Count > 1)
                                 {
-                                    System.Diagnostics.Debug.WriteLine($"Failed to add native text annotation: {ex.Message}");
+                                    XColor color = ParseColor(anno.ColorHex, 1.0); // Solid color for pen drawing
+                                    double penThickness = (anno.Thickness > 0 ? anno.Thickness : 3.5) * 0.75;
+                                    XPen pen = new XPen(color, penThickness);
+                                    pen.LineCap = XLineCap.Round;
+                                    pen.LineJoin = XLineJoin.Round;
+
+                                    for (int i = 0; i < anno.Points.Count - 1; i++)
+                                    {
+                                        XPoint p1 = MapPointToPhysical(anno.Points[i].X * 0.75, anno.Points[i].Y * 0.75, totalRotation, W_c, H_c, cropXOffset, cropYOffset);
+                                        XPoint p2 = MapPointToPhysical(anno.Points[i + 1].X * 0.75, anno.Points[i + 1].Y * 0.75, totalRotation, W_c, H_c, cropXOffset, cropYOffset);
+                                        gfx.DrawLine(pen, p1, p2);
+                                    }
+                                }
+                                else if (anno.Type == AnnotationType.Note)
+                                {
+                                    XPoint pt = MapPointToPhysical(anno.X * 0.75, anno.Y * 0.75, totalRotation, W_c, H_c, cropXOffset, cropYOffset);
+
+                                    // Add a native PDF text annotation
+                                    try
+                                    {
+                                        PdfTextAnnotation textAnnot = new PdfTextAnnotation();
+                                        textAnnot.Title = "Reader's Note";
+                                        textAnnot.Contents = anno.Content;
+                                        
+                                        // Y coordinate in PDF annotations is bottom-up, so invert it
+                                        double pdfY = page.MediaBox.Height - pt.Y;
+                                        textAnnot.Rectangle = new PdfRectangle(new XRect(pt.X - 8, pdfY - 16, 24, 24));
+                                        textAnnot.Icon = PdfTextAnnotationIcon.Comment;
+                                        page.Annotations.Add(textAnnot);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Failed to add native text annotation: {ex.Message}");
+                                    }
                                 }
                             }
                         }
+                    }
+                    finally
+                    {
+                        // Restore original page rotation
+                        page.Rotate = currentRotation;
                     }
                 }
 
                 document.Save(outputPdfPath);
             }
         });
+    }
+
+    private static XRect MapRectToPhysical(
+        double x_ui, double y_ui, double w_ui, double h_ui,
+        int rotation,
+        double W_c, double H_c,
+        double cropXOffset, double cropYOffset)
+    {
+        double x_cropped, y_cropped, w_cropped, h_cropped;
+
+        switch (rotation)
+        {
+            case 90:
+                x_cropped = y_ui;
+                y_cropped = H_c - x_ui - w_ui;
+                w_cropped = h_ui;
+                h_cropped = w_ui;
+                break;
+            case 180:
+                x_cropped = W_c - x_ui - w_ui;
+                y_cropped = H_c - y_ui - h_ui;
+                w_cropped = w_ui;
+                h_cropped = h_ui;
+                break;
+            case 270:
+                x_cropped = W_c - y_ui - h_ui;
+                y_cropped = x_ui;
+                w_cropped = h_ui;
+                h_cropped = w_ui;
+                break;
+            default: // 0
+                x_cropped = x_ui;
+                y_cropped = y_ui;
+                w_cropped = w_ui;
+                h_cropped = h_ui;
+                break;
+        }
+
+        return new XRect(x_cropped + cropXOffset, y_cropped + cropYOffset, w_cropped, h_cropped);
+    }
+
+    private static XPoint MapPointToPhysical(
+        double x_pt_ui, double y_pt_ui,
+        int rotation,
+        double W_c, double H_c,
+        double cropXOffset, double cropYOffset)
+    {
+        double x_cropped, y_cropped;
+
+        switch (rotation)
+        {
+            case 90:
+                x_cropped = y_pt_ui;
+                y_cropped = H_c - x_pt_ui;
+                break;
+            case 180:
+                x_cropped = W_c - x_pt_ui;
+                y_cropped = H_c - y_pt_ui;
+                break;
+            case 270:
+                x_cropped = W_c - y_pt_ui;
+                y_cropped = x_pt_ui;
+                break;
+            default: // 0
+                x_cropped = x_pt_ui;
+                y_cropped = y_pt_ui;
+                break;
+        }
+
+        return new XPoint(x_cropped + cropXOffset, y_cropped + cropYOffset);
     }
 
     private static XColor ParseColor(string hex, double alpha = 1.0)

@@ -1,9 +1,7 @@
 using Microsoft.UI.Xaml;
+using System;
 
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
-
-namespace FluentPdfViewer;
+namespace Glance;
 
 /// <summary>
 /// The application window. This hosts a Frame that displays pages. Add your
@@ -39,71 +37,106 @@ public sealed partial class MainWindow : Window
 
     private bool _isClosingConfirmed = false;
 
-    private async void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
+    private void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
         if (_isClosingConfirmed) return;
 
         // Check if MainPage has unsaved changes
-        if (RootFrame.Content is MainPage mainPage && mainPage.HasUnsavedChanges)
+        if (RootFrame.Content is MainPage mainPage)
         {
-            // Cancel the closing event synchronously
-            args.Cancel = true;
-
-            // Load AutoSaveOnExit preference (defaults to true)
-            bool autoSave = true;
-            try
+            if (mainPage.HasUnsavedChanges)
             {
-                var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
-                if (localSettings.Values.TryGetValue("AutoSaveOnExit", out object? autoSaveValue) && autoSaveValue is bool savedAutoSave)
-                {
-                    autoSave = savedAutoSave;
-                }
-            }
-            catch { }
+                // Cancel the closing event synchronously
+                args.Cancel = true;
 
-            if (autoSave)
-            {
+                // Load AutoSaveOnExit preference (defaults to true)
+                bool autoSave = true;
                 try
                 {
-                    // Attempt silent auto-save of original PDF before exiting
-                    await mainPage.SaveOriginalPdfSilentAsync();
+                    var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+                    if (localSettings.Values.TryGetValue("AutoSaveOnExit", out object? autoSaveValue) && autoSaveValue is bool savedAutoSave)
+                    {
+                        autoSave = savedAutoSave;
+                    }
                 }
-                catch (Exception ex)
+                catch { }
+
+                if (autoSave)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Failed to auto-save on close: {ex.Message}");
+                    // Run the save operation on a background thread to prevent UI thread dispatcher deadlocks
+                    System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await mainPage.SaveOriginalPdfSilentAsync(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Failed to auto-save on close: {ex.Message}");
+                        }
+                        _isClosingConfirmed = true;
+                        System.Environment.Exit(0);
+                    });
                 }
-                _isClosingConfirmed = true;
-                this.Close(); // Close again
+                else
+                {
+                    _ = ShowCloseDialog(mainPage);
+                }
             }
             else
             {
-                // Show confirmation dialog asynchronously
-                var dialog = new Microsoft.UI.Xaml.Controls.ContentDialog
-                {
-                    Title = "Cambios sin guardar",
-                    Content = "Tienes dibujos, marcas o notas sin guardar en el archivo PDF. ¿Estás seguro de que deseas salir sin guardar?",
-                    PrimaryButtonText = "Salir sin guardar",
-                    CloseButtonText = "Cancelar",
-                    XamlRoot = this.Content.XamlRoot
-                };
-
-                try
-                {
-                    var result = await dialog.ShowAsync();
-                    if (result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary)
-                    {
-                        _isClosingConfirmed = true;
-                        this.Close(); // Call Close() again to trigger the event and proceed
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error showing close confirmation dialog: {ex.Message}");
-                    // In case of dialog error, allow close to prevent user being stuck
-                    _isClosingConfirmed = true;
-                    this.Close();
-                }
+                // No unsaved changes, exit immediately
+                _isClosingConfirmed = true;
+                System.Environment.Exit(0);
             }
+        }
+    }
+
+    private async System.Threading.Tasks.Task ShowCloseDialog(MainPage mainPage)
+    {
+        var dialog = new Microsoft.UI.Xaml.Controls.ContentDialog
+        {
+            Title = Glance.Services.LocalizationService.Get("UnsavedChangesTitle"),
+            Content = Glance.Services.LocalizationService.Get("UnsavedChangesContent"),
+            PrimaryButtonText = Glance.Services.LocalizationService.Get("SaveAndExit"),
+            SecondaryButtonText = Glance.Services.LocalizationService.Get("ExitWithoutSaving"),
+            CloseButtonText = Glance.Services.LocalizationService.Get("Cancel"),
+            XamlRoot = this.Content.XamlRoot
+        };
+
+        try
+        {
+            var result = await dialog.ShowAsync();
+            if (result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary)
+            {
+                // Run the save operation on a background thread and exit
+                System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try
+                    {
+                        await mainPage.SaveOriginalPdfSilentAsync(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to auto-save on close: {ex.Message}");
+                    }
+                    _isClosingConfirmed = true;
+                    System.Environment.Exit(0);
+                });
+            }
+            else if (result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Secondary)
+            {
+                // User selected "Exit without saving"
+                _isClosingConfirmed = true;
+                System.Environment.Exit(0);
+            }
+            // If result is CloseButton (Cancel), do nothing (app stays open)
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error showing close confirmation dialog: {ex.Message}");
+            _isClosingConfirmed = true;
+            System.Environment.Exit(0);
         }
     }
 }

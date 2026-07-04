@@ -7,6 +7,10 @@
 [![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows_11-blue.svg)](https://www.microsoft.com/windows/)
 [![Language: C#](https://img.shields.io/badge/Language-C%23-green.svg)](https://learn.microsoft.com/en-us/dotnet/csharp/)
 
+<a href="https://apps.microsoft.com/detail/GLANCE_STORE_ID" target="_blank">
+  <img src="https://developer.microsoft.com/en-us/store/badges/images/English_get-it-from-MS.png" alt="Get it from Microsoft Store" height="40" />
+</a>
+
 Glance is a fast, lightweight, and elegant PDF document viewer designed specifically for Windows 11. Built from the ground up following Fluent Design principles, it offers a visually integrated experience featuring Mica transparency and smooth transitions. It combines the speed and minimalist design of classic document viewers like GNOME Evince with modern annotation tools inspired by Adobe Acrobat.
 
 <!-- ![Glance Demo](docs/img/Glance.gif) -->
@@ -22,6 +26,9 @@ Glance is a fast, lightweight, and elegant PDF document viewer designed specific
 * **Visual Welcome Screen (Evince-style):**
   * Grid layout displaying recent documents using cover page thumbnails rendered from the first page of each PDF.
   * Single-click quick access to recently opened files with automatic registry cleanup if files are moved or deleted.
+* **Side-by-Side Comparison (Split View):**
+  * Compare two PDF documents side-by-side dynamically with synchronous vertical layout grids.
+  * Clear comparison toggle that safely restores localized viewer states on close.
 * **Freehand Drawing Tools:**
   * Smooth digital freehand ink drawing with a rounded pen pointer (PenMode), ideal for digital signatures, sketches, or writing handwritten notes directly on the page.
 * **Precision Highlighter Tool:**
@@ -30,6 +37,10 @@ Glance is a fast, lightweight, and elegant PDF document viewer designed specific
   * Automatic Alpha channel calculation (31% opacity) to ensure the translucent color highlights the text without obscuring the original content.
 * **Sticky Notes:**
   * Drop floating comment bubbles anywhere on the PDF with a clean popover overlay to write, view, edit, and store reader remarks.
+* **System Language Localization:**
+  * Automatic interface localization detection (Spanish and English supported natively).
+* **Interactive Close and Save Flow:**
+  * Prompts users with a localized 3-button confirmation ("Save and Exit", "Exit without saving", "Cancel") if unsaved changes exist and auto-save is off, preventing data loss.
 * **Auto-saving Annotations:**
   * All notes, highlights, and freehand drawing strokes are saved automatically to a local JSON database upon pointer release, ensuring immediate persistence.
 * **Real-time Document Rotation:**
@@ -98,12 +109,23 @@ Glance uses a **hybrid C# + Rust architecture** for optimal performance:
    dotnet run --project Glance.csproj
    ```
 
-### Architecture Phases (Completed)
+### Architecture Phases
 
-- **Phase 1** ✅ - FFI Foundation (P/Invoke bridge)
-- **Phase 2** ✅ - Persistence (JSON file I/O)
-- **Phase 3** ✅ - Annotation Processing (validation, geometry)
-- **Phase 4** ✅ - PDF Rendering (lazy loading, async)
+- **Phase 1: FFI Foundation (P/Invoke bridge)** ✅
+  * Established C-compatible unmanaged boundaries.
+  * Registered dynamic DLL resolvers (`NativeLibrary.SetDllImportResolver`) to locate Glance backend binaries.
+- **Phase 2: Persistence (JSON file I/O)** ✅
+  * Engineered Rust-side serialization adaptors using Serde.
+  * Formulated local drawing database formats to store vectors, comments, and marks.
+- **Phase 3: Annotation Processing (validation, geometry)** ✅
+  * Formulated validation rules for comments, highlights, and colors.
+  * Created safety checks for drawing coordinates.
+- **Phase 4: PDF Rendering (lazy loading, async)** ✅
+  * Integrated Google PDFium via dynamic library binding.
+  * Designed async rendering buffers on C# thread pools using `CancellationToken` loops to prevent thread collisions.
+- **Phase 5: Localization & UX Polish** ✅
+  * Integrated operating system locale detector.
+  * Formulated localized interactive exit confirmation dialog flows (Save, Discard, Cancel).
 
 ### Build Variants
 

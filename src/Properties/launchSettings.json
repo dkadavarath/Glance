@@ -1,9 +1,9 @@
 {
   "profiles": {
-    "FluentPdfViewer (Package)": {
+    "Glance (Package)": {
       "commandName": "MsixPackage"
     },
-    "FluentPdfViewer (Unpackaged)": {
+    "Glance (Unpackaged)": {
       "commandName": "Project"
     }
   }

@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 Console.WriteLine("Testing DLL Load");
 Console.WriteLine("");
 
-string dllPath = @"..\src\bin\Debug\net10.0-windows10.0.26100.0\win-x64\glance_native.dll";
+string dllPath = @"..\..\bin\Debug\net10.0-windows10.0.26100.0\win-x64\glance_native.dll";
 
 if (!File.Exists(dllPath))
 {

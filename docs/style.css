@@ -656,5 +656,32 @@ body {
     }
 }
 
+/* Two-cards centering & badges */
+.pricing-grid.two-cards {
+    max-width: 800px;
+    margin: 0 auto;
+}
 
-/*  */
+.store-badge {
+    height: 48px;
+    margin-top: 16px;
+    transition: transform 0.2s ease;
+}
+
+.store-badge:hover {
+    transform: scale(1.05);
+}
+
+.cta-button-link {
+    display: inline-block;
+    margin-top: 20px;
+    transition: transform 0.2s ease;
+}
+
+.cta-button-link:hover {
+    transform: scale(1.05);
+}
+
+.store-badge-large {
+    height: 56px;
+}

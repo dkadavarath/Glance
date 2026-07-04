@@ -7,7 +7,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-pdfium-render = "0.8"
+pdfium-render = { version = "0.8", features = ["image"] }
+image = "0.25"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 windows = { version = "0.51", features = ["Win32_Foundation"] }

@@ -9,15 +9,15 @@
   IgnorableNamespaces="uap rescap systemai">
 
   <Identity
-    Name="BB086241-04EA-487E-9EDE-B10647859167"
-    Publisher="CN=AppPublisher"
+    Name="jonas1ara.GlancePDF"
+    Publisher="CN=E72FB11D-5D96-47D3-8908-CFEBBB617A16"
     Version="1.0.0.0" />
 
   <mp:PhoneIdentity PhoneProductId="BB086241-04EA-487E-9EDE-B10647859167" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
-    <DisplayName>Glance</DisplayName>
-    <PublisherDisplayName>AppPublisher</PublisherDisplayName>
+    <DisplayName>Glance PDF</DisplayName>
+    <PublisherDisplayName>jonas1ara</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
@@ -35,7 +35,7 @@
       Executable="$targetnametoken$.exe"
       EntryPoint="$targetentrypoint$">
       <uap:VisualElements
-        DisplayName="Glance"
+        DisplayName="Glance PDF"
         Description="Glance PDF Viewer"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
