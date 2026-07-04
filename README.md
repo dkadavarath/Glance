@@ -83,8 +83,8 @@ Glance uses a **hybrid C# + Rust architecture** for optimal performance:
 
 1. Clone repository:
    ```bash
-   git clone https://github.com/your-username/glance.git
-   cd glance
+   git clone https://github.com/jonas1ara/Glance.git
+   cd Glance
    ```
 
 2. Build Rust backend:
@@ -92,22 +92,14 @@ Glance uses a **hybrid C# + Rust architecture** for optimal performance:
    cd native/glance-native
    cargo build --release
    ```
+   *(Note: Building in release mode is required as the C# project is configured to automatically look for the Rust DLL in `target/release/`).*
 
-3. Copy DLL:
-   ```bash
-   copy target\release\glance_native.dll ..\..\src\bin\Debug\
-   ```
-
-4. Build C# frontend:
+3. Build and Run C# frontend:
    ```bash
    cd ../../src
-   dotnet build
-   ```
-
-5. Run:
-   ```bash
    dotnet run --project Glance.csproj
    ```
+   *(Note: The MSBuild system automatically copies the compiled `glance_native.dll` and `pdfium.dll` to the output directory during build, so no manual file copying is needed).*
 
 ### Architecture Phases
 
