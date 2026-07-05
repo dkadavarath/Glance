@@ -54,3 +54,7 @@ Generated\ Files/
 *_wpftmp.csproj
 TEST_DLL_LOAD.ps1
 CHECK_DLL_DEPENDENCIES.ps1
+
+# Cryptographic keys and certificates
+*.pfx
+*.cer
