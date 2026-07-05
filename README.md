@@ -62,6 +62,21 @@ Glance uses a **hybrid C# + Rust architecture** for optimal performance:
 
 ---
 
+## Libraries & Key Dependencies
+
+Glance relies on several open-source libraries and native projections to achieve high-performance rendering, PDF manipulations, and native platform integration:
+
+### Frontend (.NET / C#)
+* **[Windows App SDK (WinUI 3)](https://github.com/microsoft/microsoft-ui-xaml):** The modern Fluent user interface framework for native Windows desktop development.
+* **[PDFsharp](https://github.com/empira/PDFsharp):** The open-source .NET library used for compiling and burning user drawings, highlights, and annotations back into the original PDF files.
+
+### Backend & FFI (Rust)
+* **[windows-rs](https://github.com/microsoft/windows-rs):** Microsoft's official Rust projection library, providing native access to Windows APIs directly from Rust.
+* **[pdfium-render](https://github.com/ajrcarey/pdfium-rs):** A safe Rust binding layer around Google's PDFium.
+* **[pdfium-binaries](https://github.com/bblanchon/pdfium-binaries):** The pre-compiled binary distributions of Google's PDFium library (compiled by Benoît Blanchon) used to build the unmanaged rendering backend.
+
+---
+
 ## System Requirements
 
 * **OS:** Windows 10 or later
