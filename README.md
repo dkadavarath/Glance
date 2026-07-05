@@ -72,7 +72,7 @@ Glance relies on several open-source libraries and native projections to achieve
 
 ### Backend & FFI (Rust)
 * **[windows-rs](https://github.com/microsoft/windows-rs):** Microsoft's official Rust projection library, providing native access to Windows APIs directly from Rust.
-* **[pdfium-render](https://github.com/ajrcarey/pdfium-rs):** A safe Rust binding layer around Google's PDFium.
+* **[pdfium-render](https://github.com/ajrcarey/pdfium-render):** A safe Rust binding layer around Google's PDFium.
 * **[pdfium-binaries](https://github.com/bblanchon/pdfium-binaries):** The pre-compiled binary distributions of Google's PDFium library (compiled by Benoît Blanchon) used to build the unmanaged rendering backend.
 
 ---
