@@ -225,6 +225,19 @@ body {
     border-color: var(--primary-color);
 }
 
+.btn-coffee {
+    background: #FFDD00;
+    color: #000000;
+    font-weight: 600;
+    border: none;
+}
+
+.btn-coffee:hover {
+    background: #FFEA33;
+    box-shadow: 0 6px 16px rgba(255, 221, 0, 0.25);
+    color: #000000;
+}
+
 /* Features Section */
 .features {
     padding: 80px 0;
@@ -684,4 +697,10 @@ body {
 
 .store-badge-large {
     height: 56px;
+}
+
+.pricing-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
