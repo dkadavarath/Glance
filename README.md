@@ -129,6 +129,17 @@ Glance uses a **hybrid C# + Rust architecture** for optimal performance:
 
 ---
 
+## Support & Funding
+
+If you find Glance PDF useful and would like to support its development, you can sponsor the project through the following platforms:
+
+* **Buy Me A Coffee:**  
+  [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Donate-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/jonas1ara)
+* **Mercado Pago (Mexico):**  
+  [![Mercado Pago](https://img.shields.io/badge/Mercado%20Pago-Donate-00B1EA?style=for-the-badge&logo=mercadopago&logoColor=white)](https://link.mercadopago.com.mx/glance)
+
+---
+
 ## License
 
 This project is licensed under the MIT License. See the LICENSE file for details.
