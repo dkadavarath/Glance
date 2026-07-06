@@ -17,6 +17,8 @@
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <PackageCertificateKeyFile>Glance_TestKey_New.pfx</PackageCertificateKeyFile>
     <PackageCertificatePassword>glance123</PackageCertificatePassword>
+    <SelfContained>true</SelfContained>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
   </PropertyGroup>
 
   <ItemGroup>

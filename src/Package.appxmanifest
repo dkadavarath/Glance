@@ -11,7 +11,7 @@
   <Identity
     Name="jonas1ara.GlancePDF"
     Publisher="CN=E72FB11D-5D96-47D3-8908-CFEBBB617A16"
-    Version="1.0.0.0" />
+    Version="1.0.1.0" />
 
   <mp:PhoneIdentity PhoneProductId="BB086241-04EA-487E-9EDE-B10647859167" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
