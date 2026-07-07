@@ -77,14 +77,14 @@ src/
 # Prerequisites
 dotnet tool install --global Microsoft.Windows.CsWin32
 
-# Build
-dotnet build
+# Build (Pass the certificate password if using a local PFX to avoid signature warnings)
+dotnet build -p:PackageCertificatePassword=YourPassword
 
-# Build Release (optimized)
-dotnet build --configuration Release
+# Build Release / Publish (Required for generating a signed MSIX package)
+dotnet publish -c Release -r win-x64 -p:GenerateAppxPackageOnBuild=true -p:AppxPackageDir="C:\Users\adria\GitHub\Glance\src\AppPackages\" -p:SelfContained=true -p:PackageCertificatePassword=YourPassword
 
-# Run
-dotnet run
+# Run (Pass the certificate password to register the development package)
+dotnet run -p:PackageCertificatePassword=YourPassword
 ```
 
 ## Requirements
