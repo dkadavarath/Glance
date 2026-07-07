@@ -11,7 +11,7 @@
   <Identity
     Name="jonas1ara.GlancePDF"
     Publisher="CN=E72FB11D-5D96-47D3-8908-CFEBBB617A16"
-    Version="1.0.1.0" />
+    Version="1.0.2.0" />
 
   <mp:PhoneIdentity PhoneProductId="BB086241-04EA-487E-9EDE-B10647859167" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
@@ -43,6 +43,16 @@
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
         <uap:SplashScreen Image="Assets\SplashScreen.png" />
       </uap:VisualElements>
+      <Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="glance.pdf">
+            <uap:SupportedFileTypes>
+              <uap:FileType>.pdf</uap:FileType>
+            </uap:SupportedFileTypes>
+            <uap:DisplayName>PDF Document</uap:DisplayName>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
     </Application>
   </Applications>
 

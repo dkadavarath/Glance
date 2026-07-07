@@ -28,8 +28,26 @@ public sealed partial class MainWindow : Window
             AppWindow.SetIcon("Assets/AppIcon.ico");
         }
 
+        // Check for file activation arguments
+        Windows.Storage.StorageFile? fileToOpen = null;
+        try
+        {
+            var activatedArgs = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs();
+            if (activatedArgs != null && activatedArgs.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.File)
+            {
+                if (activatedArgs.Data is Windows.ApplicationModel.Activation.IFileActivatedEventArgs fileArgs && fileArgs.Files.Count > 0)
+                {
+                    fileToOpen = fileArgs.Files[0] as Windows.Storage.StorageFile;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to get activation args: {ex.Message}");
+        }
+
         // Navigate the root frame to the main page on startup.
-        RootFrame.Navigate(typeof(MainPage));
+        RootFrame.Navigate(typeof(MainPage), fileToOpen);
 
         // Subscribe to closing event to check for unsaved changes
         this.AppWindow.Closing += AppWindow_Closing;

@@ -42,6 +42,17 @@ public sealed partial class MainPage : Page
 
     public bool HasUnsavedChanges { get; set; } = false;
 
+    private Windows.Storage.StorageFile? _pendingFileToLoad;
+
+    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        if (e.Parameter is Windows.Storage.StorageFile file)
+        {
+            _pendingFileToLoad = file;
+        }
+    }
+
     private static readonly System.Text.Json.JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
@@ -99,10 +110,16 @@ public sealed partial class MainPage : Page
         this.Loaded += MainPage_Loaded;
     }
 
-    private void MainPage_Loaded(object sender, RoutedEventArgs e)
+    private async void MainPage_Loaded(object sender, RoutedEventArgs e)
     {
         InitializeSettings();
         InitializeLocalization();
+        if (_pendingFileToLoad != null)
+        {
+            DocTitleText.Text = _pendingFileToLoad.Name;
+            await LoadPdfAsync(_pendingFileToLoad);
+            _pendingFileToLoad = null;
+        }
     }
 
     private void InitializeLocalization()

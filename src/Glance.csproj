@@ -16,8 +16,8 @@
     <Nullable>enable</Nullable>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <PackageCertificateKeyFile>Glance_TestKey_New.pfx</PackageCertificateKeyFile>
-    <PackageCertificatePassword>glance123</PackageCertificatePassword>
     <SelfContained>true</SelfContained>
+    <PublishSelfContained>true</PublishSelfContained>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
   </PropertyGroup>
 
