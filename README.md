@@ -7,7 +7,7 @@
 [![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows_11-blue.svg)](https://www.microsoft.com/windows/)
 [![Language: C#](https://img.shields.io/badge/Language-C%23-green.svg)](https://learn.microsoft.com/en-us/dotnet/csharp/)
 
-<a href="https://apps.microsoft.com/detail/GLANCE_STORE_ID" target="_blank">
+<a href="https://apps.microsoft.com/detail/9P387LMMCCTB" target="_blank">
   <img src="https://developer.microsoft.com/en-us/store/badges/images/English_get-it-from-MS.png" alt="Get it from Microsoft Store" height="40" />
 </a>
 
