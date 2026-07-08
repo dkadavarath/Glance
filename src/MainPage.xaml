@@ -256,14 +256,14 @@
                     
                     <TextBlock x:Name="ThumbnailsHeader" Text="Miniaturas" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}" Margin="16,14,16,6"/>
                     
-                    <ListView Grid.Row="1" x:Name="PageListView" IsItemClickEnabled="True" ItemClick="PageListView_ItemClick" Background="Transparent" Margin="0,0,0,8">
+                    <ListView Grid.Row="1" x:Name="PageListView" IsItemClickEnabled="True" ItemClick="PageListView_ItemClick" Background="Transparent" Margin="0,0,0,8" ContainerContentChanging="PageListView_ContainerContentChanging">
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="local:PdfPageViewModel">
                                 <!-- x:Bind with OneWay is completely virtualization-safe when using observable properties -->
                                 <Grid ColumnDefinitions="Auto, *" Padding="4,4" RowSpacing="4" ColumnSpacing="12" HorizontalAlignment="Stretch">
                                     <!-- Page preview image container -->
                                     <Border Grid.Column="0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" Width="36" Height="48" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" CornerRadius="2" VerticalAlignment="Center">
-                                        <Image Source="{x:Bind ImageSource, Mode=OneWay}" Stretch="Uniform"/>
+                                        <Image Source="{x:Bind ThumbnailSource, Mode=OneWay}" Stretch="Uniform"/>
                                     </Border>
                                     <TextBlock Grid.Column="1" Text="{x:Bind PageNumberText, Mode=OneWay}" FontSize="12" VerticalAlignment="Center" FontWeight="Medium"/>
                                 </Grid>
@@ -282,7 +282,7 @@
 
                 <ScrollViewer Grid.Column="0" x:Name="PdfScrollViewer" Background="Transparent" HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled" ZoomMode="Enabled" 
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" ViewChanged="PdfScrollViewer_ViewChanged">
-                    <ItemsRepeater x:Name="PagesRepeater" Margin="0,16">
+                    <ItemsRepeater x:Name="PagesRepeater" Margin="0,16" ElementPrepared="PagesRepeater_ElementPrepared" ElementClearing="PagesRepeater_ElementClearing">
                     <ItemsRepeater.Layout>
                         <StackLayout Spacing="16"/>
                     </ItemsRepeater.Layout>
@@ -402,8 +402,8 @@
                     </Grid>
                     
                     <ScrollViewer Grid.Row="1" x:Name="PdfScrollViewerRight" Background="Transparent" HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled" ZoomMode="Enabled" 
-                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
-                        <ItemsRepeater x:Name="PagesRepeaterRight" Margin="0,16">
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" ViewChanged="PdfScrollViewerRight_ViewChanged">
+                        <ItemsRepeater x:Name="PagesRepeaterRight" Margin="0,16" ElementPrepared="PagesRepeaterRight_ElementPrepared" ElementClearing="PagesRepeaterRight_ElementClearing">
                             <ItemsRepeater.Layout>
                                 <StackLayout Spacing="16"/>
                             </ItemsRepeater.Layout>

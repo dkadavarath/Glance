@@ -59,12 +59,19 @@ public sealed partial class MainPage : Page
     };
 
     private PdfRenderService? _pdfRenderService;
-    private CancellationTokenSource? _backgroundRenderCts;
-    private Task? _backgroundRenderTask;
     private readonly SemaphoreSlim _ffiSemaphore = new(1, 1);
     private PdfDocument? _pdfDocument;  // Keep reference for lazy rendering
+    private PdfDocument? _pdfDocumentRight; // Keep reference for second PDF lazy rendering
+    private CancellationTokenSource? _pdfRenderCts;
+    private CancellationTokenSource? _pdfRenderRightCts;
+    private readonly HashSet<int> _realizedLeft = new();
+    private readonly HashSet<int> _realizedRight = new();
+    private readonly HashSet<int> _realizedSidebar = new();
+    private readonly HashSet<int> _renderingPages = new();
+    private readonly HashSet<int> _renderingPagesRight = new();
     private ObservableCollection<PdfPageViewModel> _pages = new();
     private int _currentPageIndex = 0;
+    private int _currentPageIndexRight = 0;
     private bool _isScrollingProgrammatically = false;
     private bool _isUnloading = false;
     private string _currentPdfPath = "";
@@ -396,10 +403,10 @@ public sealed partial class MainPage : Page
             }
         }
 
-        // Cancel background rendering FIRST to release the semaphore and prevent deadlocks!
-        if (_backgroundRenderCts != null)
+        // Cancel page rendering FIRST to release the semaphore and prevent deadlocks!
+        if (_pdfRenderCts != null)
         {
-            try { _backgroundRenderCts.Cancel(); } catch { }
+            try { _pdfRenderCts.Cancel(); } catch { }
         }
 
         // Proceed to unload document and return home under the FFI semaphore lock
@@ -446,10 +453,10 @@ public sealed partial class MainPage : Page
 
     public async Task CleanupForExitAsync()
     {
-        // Cancel background rendering FIRST to release the semaphore and prevent deadlocks!
-        if (_backgroundRenderCts != null)
+        // Cancel page rendering FIRST to release the semaphore and prevent deadlocks!
+        if (_pdfRenderCts != null)
         {
-            try { _backgroundRenderCts.Cancel(); } catch { }
+            try { _pdfRenderCts.Cancel(); } catch { }
         }
 
         await _ffiSemaphore.WaitAsync();
@@ -473,10 +480,10 @@ public sealed partial class MainPage : Page
     {
         if (string.IsNullOrEmpty(_currentPdfPath) || _pages.Count == 0) return false;
 
-        // Cancel background rendering FIRST to release the semaphore and prevent deadlocks!
-        if (_backgroundRenderCts != null)
+        // Cancel page rendering FIRST to release the semaphore and prevent deadlocks!
+        if (_pdfRenderCts != null)
         {
-            try { _backgroundRenderCts.Cancel(); } catch { }
+            try { _pdfRenderCts.Cancel(); } catch { }
         }
 
         await _ffiSemaphore.WaitAsync();
@@ -576,9 +583,29 @@ public sealed partial class MainPage : Page
                 // Re-render the current page smoothly
                 await RenderPageAsync(_pdfDocument, (uint)_currentPageIndex);
 
-                // Start background rendering of remaining pages silently to update their cache
-                _backgroundRenderCts = new CancellationTokenSource();
-                _backgroundRenderTask = RenderRemainingPagesAsync(_pdfDocument, 0, _backgroundRenderCts.Token);
+                if (_pdfRenderCts != null)
+                {
+                    try { _pdfRenderCts.Cancel(); } catch { }
+                    _pdfRenderCts.Dispose();
+                }
+                _pdfRenderCts = new CancellationTokenSource();
+
+                // Clear the cache of all off-screen pages so they reload from the updated file on demand.
+                // For realized pages, re-render them immediately.
+                for (int i = 0; i < _pages.Count; i++)
+                {
+                    if (_realizedLeft.Contains(i) || _realizedSidebar.Contains(i))
+                    {
+                        _pages[i].ImageSource = null;
+                        _pages[i].IsLoading = true;
+                        _ = EnsureLeftPageRenderedAsync(i);
+                    }
+                    else
+                    {
+                        _pages[i].ImageSource = null;
+                        _pages[i].IsLoading = true;
+                    }
+                }
 
                 return true;
             }
@@ -714,60 +741,385 @@ public sealed partial class MainPage : Page
 
     private async Task CancelBackgroundRenderAsync()
     {
-        var cts = _backgroundRenderCts;
-
-        if (cts != null)
+        var renderCts = _pdfRenderCts;
+        if (renderCts != null)
         {
             try
             {
-                cts.Cancel();
+                renderCts.Cancel();
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error cancelling CTS: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error cancelling render CTS: {ex.Message}");
             }
         }
-
-        if (cts == _backgroundRenderCts) _backgroundRenderCts = null;
-        _backgroundRenderTask = null;
-
+        if (renderCts == _pdfRenderCts) _pdfRenderCts = null;
         try
         {
-            cts?.Dispose();
+            renderCts?.Dispose();
         }
         catch { }
 
         await Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Render all remaining pages sequentially in background
-    /// </summary>
-    private async Task RenderRemainingPagesAsync(PdfDocument pdfDocument, uint startPage, CancellationToken cancellationToken)
+    private void PagesRepeater_ElementPrepared(Microsoft.UI.Xaml.Controls.ItemsRepeater sender, Microsoft.UI.Xaml.Controls.ItemsRepeaterElementPreparedEventArgs args)
+    {
+        int index = args.Index;
+        _realizedLeft.Add(index);
+        _ = EnsureLeftPageRenderedAsync(index);
+    }
+
+    private void PagesRepeater_ElementClearing(Microsoft.UI.Xaml.Controls.ItemsRepeater sender, Microsoft.UI.Xaml.Controls.ItemsRepeaterElementClearingEventArgs args)
+    {
+        var element = args.Element as FrameworkElement;
+        var pageVm = element?.DataContext as PdfPageViewModel;
+        if (pageVm != null)
+        {
+            int index = pageVm.PageIndex;
+            _realizedLeft.Remove(index);
+            CheckAndClearLeftPage(index);
+        }
+    }
+
+    private void PagesRepeaterRight_ElementPrepared(Microsoft.UI.Xaml.Controls.ItemsRepeater sender, Microsoft.UI.Xaml.Controls.ItemsRepeaterElementPreparedEventArgs args)
+    {
+        int index = args.Index;
+        _realizedRight.Add(index);
+        _ = EnsureRightPageRenderedAsync(index);
+    }
+
+    private void PagesRepeaterRight_ElementClearing(Microsoft.UI.Xaml.Controls.ItemsRepeater sender, Microsoft.UI.Xaml.Controls.ItemsRepeaterElementClearingEventArgs args)
+    {
+        var element = args.Element as FrameworkElement;
+        var pageVm = element?.DataContext as PdfPageViewModel;
+        if (pageVm != null)
+        {
+            int index = pageVm.PageIndex;
+            _realizedRight.Remove(index);
+            CheckAndClearRightPage(index);
+        }
+    }
+
+    private void PageListView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        var pageVm = args.Item as PdfPageViewModel;
+        if (pageVm != null)
+        {
+            int index = pageVm.PageIndex;
+            if (args.InRecycleQueue)
+            {
+                _realizedSidebar.Remove(index);
+                // Clear the thumbnail memory immediately on recycle
+                pageVm.ThumbnailSource = null;
+            }
+            else
+            {
+                _realizedSidebar.Add(index);
+                if (pageVm.ThumbnailSource == null)
+                {
+                    _ = EnsureThumbnailRenderedAsync(index);
+                }
+            }
+        }
+    }
+
+    private bool IsPageVisibleInViewport(int pageIndex, int rangeSize = 10)
+    {
+        if (_pages == null || pageIndex < 0 || pageIndex >= _pages.Count || _totalPages == 0) return false;
+
+        // Keep pages 0, 1, 2 always pre-rendered
+        if (pageIndex <= 2) return true;
+
+        return pageIndex >= _currentPageIndex - rangeSize && pageIndex <= _currentPageIndex + rangeSize;
+    }
+
+    private bool IsPageVisibleInViewportRight(int pageIndex, int rangeSize = 10)
+    {
+        if (_pagesRight == null || pageIndex < 0 || pageIndex >= _pagesRight.Count) return false;
+
+        return pageIndex >= _currentPageIndexRight - rangeSize && pageIndex <= _currentPageIndexRight + rangeSize;
+    }
+
+    private async Task EnsureLeftPageRenderedAsync(int pageIndex)
+    {
+        if (_isUnloading || _pdfDocument == null || _pages == null || pageIndex < 0 || pageIndex >= _pages.Count) return;
+
+        var pageVm = _pages[pageIndex];
+        if (pageVm.ImageSource != null) return; // Already rendered!
+
+        if (_renderingPages.Contains(pageIndex)) return;
+        _renderingPages.Add(pageIndex);
+
+        try
+        {
+            if (pageVm.RenderCts != null)
+            {
+                try { pageVm.RenderCts.Cancel(); } catch { }
+                try { pageVm.RenderCts.Dispose(); } catch { }
+            }
+
+            var globalToken = _pdfRenderCts?.Token ?? default;
+            pageVm.RenderCts = CancellationTokenSource.CreateLinkedTokenSource(globalToken);
+            var token = pageVm.RenderCts.Token;
+            
+            // Tiny 50ms debounce delay to filter out ultra-fast scrolling from entering native FFI code
+            if (pageIndex > 0)
+            {
+                await Task.Delay(50, token);
+                if (token.IsCancellationRequested || _isUnloading) return;
+            }
+
+            // Render if in the viewport range
+            if (!IsPageVisibleInViewport(pageIndex, 10))
+            {
+                return;
+            }
+
+            await RenderPageAsync(_pdfDocument, (uint)pageIndex, token);
+        }
+        catch (TaskCanceledException) { }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _renderingPages.Remove(pageIndex);
+        }
+    }
+
+    private void LogThumbnail(string message)
     {
         try
         {
-            for (uint i = startPage; i < pdfDocument.PageCount; i++)
+            string logPath = @"C:\Users\adria\.gemini\antigravity-cli\brain\6fe9dee8-9c4a-4a0e-8b52-9b64bb97c140\scratch\thumbnail_log.txt";
+            string dir = Path.GetDirectoryName(logPath);
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss.fff}] {message}\n");
+        }
+        catch { }
+    }
+
+    private async Task EnsureThumbnailRenderedAsync(int pageIndex)
+    {
+        if (_pages == null || pageIndex < 0 || pageIndex >= _pages.Count) return;
+
+        var pageVm = _pages[pageIndex];
+        if (pageVm.ThumbnailSource != null) return; // Already rendered!
+
+        if (_pdfDocument == null)
+        {
+            LogThumbnail($"Aborted EnsureThumbnailRenderedAsync for page {pageIndex} because _pdfDocument is null");
+            return;
+        }
+
+        var globalToken = _pdfRenderCts?.Token ?? default;
+        try
+        {
+            // Debounce for 30ms to prevent flooding during ultra-fast sidebar scrolling
+            await Task.Delay(30, globalToken);
+            if (globalToken.IsCancellationRequested || _isUnloading) return;
+
+            if (!_realizedSidebar.Contains(pageIndex))
             {
-                if (cancellationToken.IsCancellationRequested) break;
-
-                // Add small delay to prevent UI lag
-                await Task.Delay(10, cancellationToken);
-
-                if (cancellationToken.IsCancellationRequested) break;
-
-                await RenderPageAsync(pdfDocument, i, cancellationToken);
+                LogThumbnail($"Page {pageIndex} not in realized sidebar after delay");
+                return;
             }
 
-            System.Diagnostics.Debug.WriteLine("✓ All pages rendered");
+            await RenderThumbnailAsync(_pdfDocument, (uint)pageIndex, globalToken);
         }
-        catch (OperationCanceledException)
+        catch (TaskCanceledException) { LogThumbnail($"Page {pageIndex} TaskCanceledException in EnsureThumbnailRenderedAsync"); }
+        catch (OperationCanceledException) { LogThumbnail($"Page {pageIndex} OperationCanceledException in EnsureThumbnailRenderedAsync"); }
+    }
+
+    private async Task RenderThumbnailAsync(PdfDocument pdfDocument, uint pageIndex, CancellationToken cancellationToken = default)
+    {
+        if (_isUnloading || pageIndex >= _pages.Count) return;
+
+        try
         {
-            System.Diagnostics.Debug.WriteLine("Background rendering task cancelled.");
+            var renderService = _pdfRenderService;
+            if (renderService != null && !_isUnloading)
+            {
+                try
+                {
+                    if (pageIndex >= _pages.Count || _isUnloading) return;
+                    var pageVm = _pages[(int)pageIndex];
+                    
+                    double pageRatio = pageVm.PageWidth / pageVm.PageHeight;
+                    if (pageRatio <= 0) pageRatio = 0.75;
+                    uint height = 96;
+                    uint width = (uint)(96.0 * pageRatio);
+                    if (width == 0) width = 72;
+                    
+                    if (cancellationToken.IsCancellationRequested || _isUnloading) return;
+                    
+                    LogThumbnail($"FFI rendering page {pageIndex} at {width}x{height}");
+                    byte[] pngBytes = await renderService.RenderPageAsync(pageIndex, width, height, 96.0f, cancellationToken);
+                    LogThumbnail($"FFI rendered page {pageIndex}, bytes: {pngBytes?.Length}");
+                    
+                    if (cancellationToken.IsCancellationRequested || _isUnloading || pageIndex >= _pages.Count) return;
+                    
+                    var rustStream = new InMemoryRandomAccessStream();
+                    using (var writer = new DataWriter(rustStream))
+                    {
+                        writer.WriteBytes(pngBytes);
+                        await writer.StoreAsync();
+                        await writer.FlushAsync();
+                        writer.DetachStream();
+                    }
+                    
+                    if (_isUnloading || pageIndex >= _pages.Count) return;
+                    var rustBitmap = new BitmapImage();
+                    rustStream.Seek(0);
+                    await rustBitmap.SetSourceAsync(rustStream);
+                    
+                    if (_isUnloading || pageIndex >= _pages.Count) return;
+                    if (!_realizedSidebar.Contains((int)pageIndex))
+                    {
+                        LogThumbnail($"Page {pageIndex} scrolled out of sidebar, discarding thumbnail");
+                        return; // Discard if no longer visible in sidebar
+                    }
+                    _pages[(int)pageIndex].ThumbnailSource = rustBitmap;
+                    LogThumbnail($"Successfully set ThumbnailSource for page {pageIndex}!");
+                }
+                catch (Exception ex)
+                {
+                    LogThumbnail($"Inner exception for page {pageIndex}: {ex.Message}\n{ex.StackTrace}");
+                }
+            }
+            else
+            {
+                LogThumbnail($"renderService is null ({renderService == null}) or unloading ({_isUnloading})");
+            }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"✗ Error rendering remaining pages: {ex.Message}");
+            LogThumbnail($"Outer exception for page {pageIndex}: {ex.Message}");
+        }
+    }
+
+    private void CheckAndClearLeftPage(int pageIndex)
+    {
+        if (_pages == null || pageIndex < 0 || pageIndex >= _pages.Count) return;
+
+        if (!IsPageVisibleInViewport(pageIndex, 10))
+        {
+            var pageVm = _pages[pageIndex];
+            
+            if (pageVm.RenderCts != null)
+            {
+                try { pageVm.RenderCts.Cancel(); } catch { }
+                try { pageVm.RenderCts.Dispose(); } catch { }
+                pageVm.RenderCts = null;
+            }
+
+            pageVm.ImageSource = null;
+            pageVm.IsLoading = true;
+        }
+    }
+
+    private async Task EnsureRightPageRenderedAsync(int pageIndex)
+    {
+        if (_isUnloading || _pdfDocumentRight == null || _pagesRight == null || pageIndex < 0 || pageIndex >= _pagesRight.Count) return;
+
+        var pageVm = _pagesRight[pageIndex];
+        if (pageVm.ImageSource != null) return; // Already rendered!
+
+        if (_renderingPagesRight.Contains(pageIndex)) return;
+        _renderingPagesRight.Add(pageIndex);
+
+        try
+        {
+            if (pageVm.RenderCts != null)
+            {
+                try { pageVm.RenderCts.Cancel(); } catch { }
+                try { pageVm.RenderCts.Dispose(); } catch { }
+            }
+
+            var globalToken = _pdfRenderRightCts?.Token ?? default;
+            pageVm.RenderCts = CancellationTokenSource.CreateLinkedTokenSource(globalToken);
+            var token = pageVm.RenderCts.Token;
+            
+            // Tiny 50ms debounce delay to filter out ultra-fast scrolling from entering native FFI code
+            if (pageIndex > 0)
+            {
+                await Task.Delay(50, token);
+                if (token.IsCancellationRequested || _isUnloading) return;
+            }
+
+            if (!IsPageVisibleInViewportRight(pageIndex, 10))
+            {
+                return;
+            }
+
+            await RenderRightPageAsync(_pdfDocumentRight, (uint)pageIndex);
+        }
+        catch (TaskCanceledException) { }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _renderingPagesRight.Remove(pageIndex);
+        }
+    }
+
+    private void CheckAndClearRightPage(int pageIndex)
+    {
+        if (_pagesRight == null || pageIndex < 0 || pageIndex >= _pagesRight.Count) return;
+
+        if (!IsPageVisibleInViewportRight(pageIndex, 10))
+        {
+            var pageVm = _pagesRight[pageIndex];
+            
+            if (pageVm.RenderCts != null)
+            {
+                try { pageVm.RenderCts.Cancel(); } catch { }
+                try { pageVm.RenderCts.Dispose(); } catch { }
+                pageVm.RenderCts = null;
+            }
+
+            pageVm.ImageSource = null;
+            pageVm.IsLoading = true;
+        }
+    }
+
+    private async Task RenderRightPageAsync(PdfDocument pdfDocument, uint pageIndex)
+    {
+        if (_isUnloading || pageIndex >= _pagesRight.Count || pdfDocument == null) return;
+
+        try
+        {
+            var pageVm = _pagesRight[(int)pageIndex];
+            if (pageVm.ImageSource != null) return;
+
+            using var page = pdfDocument.GetPage(pageIndex);
+            var renderStream = new InMemoryRandomAccessStream();
+            var renderOptions = new PdfPageRenderOptions();
+            renderOptions.DestinationWidth = (uint)(page.Size.Width * 2.0);
+
+            var token = _pdfRenderRightCts?.Token ?? default;
+            if (token.IsCancellationRequested) return;
+
+            await page.RenderToStreamAsync(renderStream, renderOptions).AsTask(token);
+
+            if (token.IsCancellationRequested) return;
+
+            var bitmap = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+            renderStream.Seek(0);
+            await bitmap.SetSourceAsync(renderStream);
+
+            if (token.IsCancellationRequested || _isUnloading) return;
+
+            if (pageIndex > 0 && !IsPageVisibleInViewportRight((int)pageIndex, 10))
+            {
+                System.Diagnostics.Debug.WriteLine($"⚠ Right page {pageIndex} went out of viewport range; discarding image.");
+                return;
+            }
+
+            pageVm.ImageSource = bitmap;
+            pageVm.IsLoading = false;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"✗ Failed to render right page {pageIndex}: {ex.Message}");
         }
     }
 
@@ -802,6 +1154,7 @@ public sealed partial class MainPage : Page
                         writer.WriteBytes(pngBytes);
                         await writer.StoreAsync();
                         await writer.FlushAsync();
+                        writer.DetachStream();
                     }
                     
                     if (_isUnloading || pageIndex >= _pages.Count) return;
@@ -810,6 +1163,11 @@ public sealed partial class MainPage : Page
                     await rustBitmap.SetSourceAsync(rustStream);
                     
                     if (_isUnloading || pageIndex >= _pages.Count) return;
+                    if (pageIndex > 2 && !IsPageVisibleInViewport((int)pageIndex, 10))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"⚠ Page {pageIndex} went out of viewport range; discarding image.");
+                        return;
+                    }
                     _pages[(int)pageIndex].ImageSource = rustBitmap;
                     _pages[(int)pageIndex].IsLoading = false;
                     
@@ -850,6 +1208,12 @@ public sealed partial class MainPage : Page
             renderStream.Seek(0);
             await bitmap.SetSourceAsync(renderStream);
 
+            if (_isUnloading || pageIndex >= _pages.Count) return;
+            if (pageIndex > 2 && !IsPageVisibleInViewport((int)pageIndex, 10))
+            {
+                System.Diagnostics.Debug.WriteLine($"⚠ Page {pageIndex} went out of viewport range; discarding image.");
+                return;
+            }
             // Update page in collection
             _pages[(int)pageIndex].ImageSource = bitmap;
             _pages[(int)pageIndex].IsLoading = false;
@@ -883,10 +1247,10 @@ public sealed partial class MainPage : Page
     {
         if (file == null) return;
 
-        // Cancel background rendering FIRST to release the semaphore and prevent deadlocks!
-        if (_backgroundRenderCts != null)
+        // Cancel page rendering FIRST to release the semaphore and prevent deadlocks!
+        if (_pdfRenderCts != null)
         {
-            try { _backgroundRenderCts.Cancel(); } catch { }
+            try { _pdfRenderCts.Cancel(); } catch { }
         }
 
         await _ffiSemaphore.WaitAsync();
@@ -905,6 +1269,17 @@ public sealed partial class MainPage : Page
             TotalPagesText.Text = "/ 0";
             _currentPdfPath = file.Path;
             HasUnsavedChanges = false;
+            _realizedLeft.Clear();
+            _realizedRight.Clear();
+            _realizedSidebar.Clear();
+            _renderingPages.Clear();
+            _renderingPagesRight.Clear();
+            if (_pdfRenderCts != null)
+            {
+                try { _pdfRenderCts.Cancel(); } catch { }
+                _pdfRenderCts.Dispose();
+            }
+            _pdfRenderCts = new CancellationTokenSource();
 
             // Hide welcome screen, show document panel and home button
             WelcomePanel.Visibility = Visibility.Collapsed;
@@ -967,24 +1342,15 @@ public sealed partial class MainPage : Page
 
                 System.Diagnostics.Debug.WriteLine($"✓ Placeholders created. PDF ready");
 
-                // Render first N pages immediately for smooth scrolling
-                uint pagesToRenderImmediately = Math.Min(10, _pdfDocument.PageCount);
-                System.Diagnostics.Debug.WriteLine($"Rendering first {pagesToRenderImmediately} pages...");
-
+                // Render the first few pages immediately so the user sees them instantly
+                uint pagesToRenderImmediately = Math.Min(3, _pdfDocument.PageCount);
                 for (uint i = 0; i < pagesToRenderImmediately; i++)
                 {
                     await RenderPageAsync(_pdfDocument, i);
                 }
 
-                System.Diagnostics.Debug.WriteLine($"✓ First {pagesToRenderImmediately} pages rendered");
-
-                // Start rendering remaining pages in background (non-blocking)
-                if (_pdfDocument.PageCount > pagesToRenderImmediately)
-                {
-                    _backgroundRenderCts = new CancellationTokenSource();
-                    System.Diagnostics.Debug.WriteLine("Starting background rendering of remaining pages...");
-                    _backgroundRenderTask = RenderRemainingPagesAsync(_pdfDocument, pagesToRenderImmediately, _backgroundRenderCts.Token);
-                }
+                // Pre-render the initial 10-page buffer range immediately
+                UpdateVisiblePages();
 
                 // Generate thumbnail and add to recents list
                 try
@@ -1088,23 +1454,31 @@ public sealed partial class MainPage : Page
         {
             _currentPageIndex = index;
             
-            // Temporary block ViewChanged scroll sync to avoid recursive selection jumps
+            // Block ViewChanged scroll sync to avoid recursive selection jumps
             _isScrollingProgrammatically = true;
             
             PageNumberInput.Text = (index + 1).ToString();
             PageListView.SelectedIndex = index;
             
-            var element = PagesRepeater.GetOrCreateElement(index) as UIElement;
-            if (element != null)
+            // Calculate target vertical offset
+            double targetOffset = 16.0; // PagesRepeater top margin (16)
+            for (int i = 0; i < index; i++)
             {
-                element.StartBringIntoView(new BringIntoViewOptions 
-                { 
-                    VerticalAlignmentRatio = 0.0 // Scroll to top of the item
-                });
+                targetOffset += _pages[i].PageHeight + 18.0 + 16.0; // item height + spacing
             }
+
+            double zoom = PdfScrollViewer.ZoomFactor;
+            if (zoom <= 0) zoom = 1.0;
+
+            PdfScrollViewer.ChangeView(null, targetOffset * zoom, null, true);
             
-            await Task.Delay(500);
-            _isScrollingProgrammatically = false;
+            // Fallback safety to reset the sync flag
+            await Task.Delay(1000);
+            if (_isScrollingProgrammatically)
+            {
+                _isScrollingProgrammatically = false;
+                UpdateVisiblePages();
+            }
         }
     }
 
@@ -1165,50 +1539,159 @@ public sealed partial class MainPage : Page
         PdfScrollViewer.ChangeView(null, null, zoomFactor);
     }
 
-    private void PdfScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
+
+    private void UpdateVisiblePages()
     {
-        if (_isScrollingProgrammatically) return;
         if (_pdfRenderService == null || _totalPages == 0 || _pages.Count == 0) return;
 
         double offset = PdfScrollViewer.VerticalOffset;
+        double zoom = PdfScrollViewer.ZoomFactor;
+        if (zoom <= 0) zoom = 1.0;
 
-        if (_totalPages > 0)
+        double currentOffset = offset / zoom;
+        int activePageIndex = 0;
+        double accumulatedHeight = 16.0; // PagesRepeater top margin (16)
+        bool activePageFound = false;
+
+        for (int i = 0; i < _pages.Count; i++)
         {
-            double zoom = PdfScrollViewer.ZoomFactor;
-            double currentOffset = offset / (zoom > 0 ? zoom : 1.0); // normalize offset to 100% zoom
-            
-            int activePageIndex = 0;
-            double accumulatedHeight = 16.0; // PagesRepeater top margin (16)
+            double pageHeight = _pages[i].PageHeight;
+            double itemHeight = pageHeight + 18.0; // border height + margin
 
-            for (int i = 0; i < _pages.Count; i++)
+            // Determine active page (closest to the current scroll offset top)
+            if (!activePageFound)
             {
-                double pageHeight = _pages[i].PageHeight;
-                double itemHeight = pageHeight + 18.0; // Height of Border including thickness and margin
-
-                if (currentOffset < accumulatedHeight + itemHeight + 8.0) // Closer to this page than next (8.0 is half of spacing)
+                if (currentOffset < accumulatedHeight + itemHeight + 8.0)
                 {
                     activePageIndex = i;
-                    break;
+                    activePageFound = true;
                 }
+            }
 
-                accumulatedHeight += itemHeight + 16.0; // add item height + StackLayout spacing (16)
+            accumulatedHeight += itemHeight + 16.0; // spacing (16)
+            if (!activePageFound)
+            {
                 activePageIndex = i;
             }
+        }
 
-            activePageIndex = Math.Max(0, Math.Min(activePageIndex, (int)_totalPages - 1));
+        activePageIndex = Math.Max(0, Math.Min(activePageIndex, (int)_totalPages - 1));
 
-            if (activePageIndex != _currentPageIndex)
+        if (activePageIndex != _currentPageIndex)
+        {
+            _currentPageIndex = activePageIndex;
+            PageNumberInput.Text = (_currentPageIndex + 1).ToString();
+            
+            // Highlight item in sidebar
+            _isScrollingProgrammatically = true;
+            PageListView.SelectedIndex = _currentPageIndex;
+            PageListView.ScrollIntoView(PageListView.SelectedItem);
+            _isScrollingProgrammatically = false;
+        }
+
+        // Render buffer of 10 pages up and down
+        int startRange = Math.Max(0, _currentPageIndex - 10);
+        int endRange = Math.Min(_pages.Count - 1, _currentPageIndex + 10);
+
+        for (int i = 0; i < _pages.Count; i++)
+        {
+            if ((i >= startRange && i <= endRange) || i <= 2)
             {
-                _currentPageIndex = activePageIndex;
-                PageNumberInput.Text = (_currentPageIndex + 1).ToString();
-                
-                // Highlight item in sidebar
-                _isScrollingProgrammatically = true;
-                PageListView.SelectedIndex = _currentPageIndex;
-                PageListView.ScrollIntoView(PageListView.SelectedItem);
-                _isScrollingProgrammatically = false;
+                _ = EnsureLeftPageRenderedAsync(i);
+            }
+            else
+            {
+                CheckAndClearLeftPage(i);
             }
         }
+    }
+
+    private void UpdateVisiblePagesRight()
+    {
+        if (_pdfDocumentRight == null || _pagesRight == null || _pagesRight.Count == 0) return;
+
+        double offset = PdfScrollViewerRight.VerticalOffset;
+        double zoom = PdfScrollViewerRight.ZoomFactor;
+        if (zoom <= 0) zoom = 1.0;
+
+        double currentOffset = offset / zoom;
+        int activePageIndex = 0;
+        double accumulatedHeight = 16.0; // PagesRepeater top margin (16)
+        bool activePageFound = false;
+
+        for (int i = 0; i < _pagesRight.Count; i++)
+        {
+            double pageHeight = _pagesRight[i].PageHeight;
+            double itemHeight = pageHeight + 18.0;
+
+            if (!activePageFound)
+            {
+                if (currentOffset < accumulatedHeight + itemHeight + 8.0)
+                {
+                    activePageIndex = i;
+                    activePageFound = true;
+                }
+            }
+
+            accumulatedHeight += itemHeight + 16.0;
+            if (!activePageFound)
+            {
+                activePageIndex = i;
+            }
+        }
+
+        activePageIndex = Math.Max(0, Math.Min(activePageIndex, _pagesRight.Count - 1));
+        _currentPageIndexRight = activePageIndex;
+
+        // Render buffer of 10 pages up and down
+        int startRange = Math.Max(0, _currentPageIndexRight - 10);
+        int endRange = Math.Min(_pagesRight.Count - 1, _currentPageIndexRight + 10);
+
+        for (int i = 0; i < _pagesRight.Count; i++)
+        {
+            if (i >= startRange && i <= endRange)
+            {
+                _ = EnsureRightPageRenderedAsync(i);
+            }
+            else
+            {
+                CheckAndClearRightPage(i);
+            }
+        }
+    }
+
+    private void PdfScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (_isScrollingProgrammatically)
+        {
+            if (!e.IsIntermediate)
+            {
+                _isScrollingProgrammatically = false;
+                GC.Collect();
+                UpdateVisiblePages();
+            }
+            return;
+        }
+        if (_pdfRenderService == null || _totalPages == 0 || _pages.Count == 0) return;
+
+        if (!e.IsIntermediate)
+        {
+            GC.Collect();
+        }
+
+        UpdateVisiblePages();
+    }
+
+    private void PdfScrollViewerRight_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (_pdfDocumentRight == null || _pagesRight == null || _pagesRight.Count == 0) return;
+
+        if (!e.IsIntermediate)
+        {
+            GC.Collect();
+        }
+
+        UpdateVisiblePagesRight();
     }
 
     // Annotation Mode Handlers
@@ -1354,6 +1837,15 @@ public sealed partial class MainPage : Page
             SecondaryViewerContainer.Visibility = Visibility.Collapsed;
             ViewerDivider.Visibility = Visibility.Collapsed;
             _pagesRight.Clear();
+            _pdfDocumentRight = null;
+            _realizedRight.Clear();
+            _renderingPagesRight.Clear();
+            if (_pdfRenderRightCts != null)
+            {
+                try { _pdfRenderRightCts.Cancel(); } catch { }
+                _pdfRenderRightCts.Dispose();
+                _pdfRenderRightCts = null;
+            }
             if (SecondaryTitleText != null)
             {
                 SecondaryTitleText.Text = Glance.Services.LocalizationService.Get("SideBySideComparer");
@@ -1395,6 +1887,14 @@ public sealed partial class MainPage : Page
         {
             SecondaryTitleText.Text = $"Cargando: {file.Name}...";
             _pagesRight.Clear();
+            _realizedRight.Clear();
+            _renderingPagesRight.Clear();
+            if (_pdfRenderRightCts != null)
+            {
+                try { _pdfRenderRightCts.Cancel(); } catch { }
+                _pdfRenderRightCts.Dispose();
+            }
+            _pdfRenderRightCts = new CancellationTokenSource();
 
             // Load into memory to avoid file lock
             InMemoryRandomAccessStream memoryStream = new InMemoryRandomAccessStream();
@@ -1405,6 +1905,7 @@ public sealed partial class MainPage : Page
             memoryStream.Seek(0);
 
             var docRight = await PdfDocument.LoadFromStreamAsync(memoryStream);
+            _pdfDocumentRight = docRight;
             
             // Populate pages view model for right column
             for (uint i = 0; i < docRight.PageCount; i++)
@@ -1416,7 +1917,8 @@ public sealed partial class MainPage : Page
                     {
                         PageIndex = (int)i,
                         PageWidth = size.Width,
-                        PageHeight = size.Height
+                        PageHeight = size.Height,
+                        IsLoading = true
                     };
                     _pagesRight.Add(pageVm);
                 }
@@ -1424,38 +1926,21 @@ public sealed partial class MainPage : Page
 
             SecondaryTitleText.Text = file.Name;
 
-            // Render pages in background (non-blocking)
-            _ = RenderSecondPdfPagesAsync(docRight);
+            // Render first few pages immediately and pre-render initial buffer range
+            if (docRight.PageCount > 0)
+            {
+                uint pagesToRender = Math.Min(3, docRight.PageCount);
+                for (uint i = 0; i < pagesToRender; i++)
+                {
+                    _ = EnsureRightPageRenderedAsync((int)i);
+                }
+                UpdateVisiblePagesRight();
+            }
         }
         catch (Exception ex)
         {
             SecondaryTitleText.Text = "Error al cargar PDF";
             System.Diagnostics.Debug.WriteLine($"Error loading second PDF: {ex.Message}");
-        }
-    }
-
-    private async Task RenderSecondPdfPagesAsync(PdfDocument doc)
-    {
-        try
-        {
-            for (int i = 0; i < _pagesRight.Count; i++)
-            {
-                var pageVm = _pagesRight[i];
-                using (var page = doc.GetPage((uint)i))
-                {
-                    InMemoryRandomAccessStream stream = new InMemoryRandomAccessStream();
-                    await page.RenderToStreamAsync(stream);
-                    
-                    var image = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                    await image.SetSourceAsync(stream);
-                    
-                    pageVm.ImageSource = image;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Error rendering second PDF pages: {ex.Message}");
         }
     }
 
@@ -2196,8 +2681,11 @@ public class PdfPageViewModel : INotifyPropertyChanged
     private double _rotationAngle = 0.0;
     private int _pageIndex;
     private ImageSource? _imageSource;
+    private ImageSource? _thumbnailSource = null;
     private bool _isLoading = false;
     private Microsoft.UI.Xaml.Media.Brush? _annotationsBackground = null;
+
+    public CancellationTokenSource? RenderCts { get; set; }
 
     public Microsoft.UI.Xaml.Media.Brush? AnnotationsBackground
     {
@@ -2209,6 +2697,12 @@ public class PdfPageViewModel : INotifyPropertyChanged
     {
         get => _imageSource;
         set => SetProperty(ref _imageSource, value);
+    }
+
+    public ImageSource? ThumbnailSource
+    {
+        get => _thumbnailSource;
+        set => SetProperty(ref _thumbnailSource, value);
     }
 
     public bool IsLoading

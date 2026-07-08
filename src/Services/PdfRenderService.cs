@@ -86,6 +86,10 @@ public class PdfRenderService : IDisposable
         await _ffiLock.WaitAsync(cancellationToken);
         try
         {
+            if (_pdfEngineHandle == IntPtr.Zero)
+            {
+                throw new InvalidOperationException("PDF engine was disposed.");
+            }
             return await AsyncBridge.RunNativeAsync(() =>
             {
                 var opts = new GlanceNative.RenderOptions
@@ -175,6 +179,10 @@ public class PdfRenderService : IDisposable
         await _ffiLock.WaitAsync(cancellationToken);
         try
         {
+            if (_pdfEngineHandle == IntPtr.Zero)
+            {
+                throw new InvalidOperationException("PDF engine was disposed.");
+            }
             return await AsyncBridge.RunNativeAsync(() =>
             {
                 IntPtr jsonDataPtr = IntPtr.Zero;
@@ -233,24 +241,33 @@ public class PdfRenderService : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-
-        try
-        {
-            _ffiLock.Wait();
-            if (_pdfEngineHandle != IntPtr.Zero)
-            {
-                GlanceNative.pdf_engine_destroy(_pdfEngineHandle);
-                _pdfEngineHandle = IntPtr.Zero;
-                System.Diagnostics.Debug.WriteLine("✓ PDF engine destroyed");
-            }
-        }
-        catch { }
-        finally
-        {
-            try { _ffiLock.Release(); } catch { }
-        }
-
-        _ffiLock.Dispose();
         _disposed = true;
+
+        var handleToDestroy = _pdfEngineHandle;
+        _pdfEngineHandle = IntPtr.Zero;
+
+        // Run disposal asynchronously on the thread pool to avoid blocking the UI thread and prevent deadlocks.
+        // This allows any active page rendering tasks to complete and release the lock.
+        Task.Run(async () =>
+        {
+            try
+            {
+                await _ffiLock.WaitAsync();
+                if (handleToDestroy != IntPtr.Zero)
+                {
+                    GlanceNative.pdf_engine_destroy(handleToDestroy);
+                    System.Diagnostics.Debug.WriteLine("✓ PDF engine destroyed asynchronously");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"✗ Error in native PDF engine disposal: {ex.Message}");
+            }
+            finally
+            {
+                try { _ffiLock.Release(); } catch { }
+                _ffiLock.Dispose();
+            }
+        });
     }
 }

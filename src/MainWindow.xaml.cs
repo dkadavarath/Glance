@@ -51,6 +51,29 @@ public sealed partial class MainWindow : Window
 
         // Subscribe to closing event to check for unsaved changes
         this.AppWindow.Closing += AppWindow_Closing;
+        this.VisibilityChanged += MainWindow_VisibilityChanged;
+    }
+
+    [System.Runtime.InteropServices.DllImport("psapi.dll")]
+    private static extern int EmptyWorkingSet(IntPtr hwProcess);
+
+    private void MainWindow_VisibilityChanged(object sender, WindowVisibilityChangedEventArgs args)
+    {
+        if (!args.Visible)
+        {
+            // Window is minimized or hidden. Perform garbage collection
+            // and trim working set to drop memory usage to 7-9MB, matching UWP apps.
+            try
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+                
+                var currentProcess = System.Diagnostics.Process.GetCurrentProcess();
+                EmptyWorkingSet(currentProcess.Handle);
+            }
+            catch { }
+        }
     }
 
     private bool _isClosingConfirmed = false;
