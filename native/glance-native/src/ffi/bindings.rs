@@ -26,7 +26,7 @@ pub struct Response {
 // ============================================================================
 
 /// Create a new PDF engine for the given file path
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn pdf_engine_create(pdf_path: *const u8) -> *mut PdfEngine {
     if pdf_path.is_null() {
         return std::ptr::null_mut();
@@ -44,7 +44,7 @@ pub extern "C" fn pdf_engine_create(pdf_path: *const u8) -> *mut PdfEngine {
 }
 
 /// Destroy a PDF engine and free resources
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn pdf_engine_destroy(engine: *mut PdfEngine) {
     if !engine.is_null() {
         unsafe {
@@ -54,7 +54,7 @@ pub extern "C" fn pdf_engine_destroy(engine: *mut PdfEngine) {
 }
 
 /// Render a specific page from PDF to PNG bytes
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn pdf_render_page(
     engine: *mut PdfEngine,
     opts: *const RenderOptions,
@@ -101,7 +101,7 @@ pub extern "C" fn pdf_render_page(
 }
 
 /// Search for text across document pages and return character bounds as a JSON string Response
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn pdf_search_text(
     engine: *mut PdfEngine,
     query: *const u8,
@@ -172,7 +172,7 @@ pub extern "C" fn pdf_search_text(
 // ============================================================================
 
 /// Save annotations to JSON file
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn annotations_save(
     json: *const u8,
     path: *const u8,
@@ -240,7 +240,7 @@ pub extern "C" fn annotations_save(
 }
 
 /// Load annotations from JSON file
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn annotations_load(
     path: *const u8,
 ) -> Response {
@@ -300,7 +300,7 @@ pub extern "C" fn annotations_load(
 }
 
 /// Process and validate annotations
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn annotations_process(
     json: *const u8,
 ) -> Response {
@@ -361,7 +361,7 @@ pub extern "C" fn annotations_process(
 /// Free memory allocated by Rust and returned to C#
 /// If len is 0, ptr is treated as a C-style null-terminated string and freed using CString.
 /// If len > 0, ptr is treated as a boxed slice of bytes (Box<[u8]>) and freed using Box.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn memory_free(ptr: *mut u8, len: u64) {
     if !ptr.is_null() {
         unsafe {
@@ -382,7 +382,7 @@ pub extern "C" fn memory_free(ptr: *mut u8, len: u64) {
 // ============================================================================
 
 /// Simple test function to verify DLL loads
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn test_ffi_works() -> bool {
     true
 }

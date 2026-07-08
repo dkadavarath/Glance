@@ -37,7 +37,6 @@ pub fn write_json_file(data: &str, path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::TempDir;
 
     #[test]
