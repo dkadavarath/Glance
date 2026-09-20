@@ -60,3 +60,11 @@ CHECK_DLL_DEPENDENCIES.ps1
 # Cryptographic keys and certificates
 *.pfx
 *.cer
+
+# Secrets — never commit
+pat.txt
+*.pat
+.env
+.env.*
+*.pem
+*.key
