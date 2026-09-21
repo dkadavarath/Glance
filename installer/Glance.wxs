@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="Glance"
+           Manufacturer="Glance"
+           Version="$(var.Version)"
+           UpgradeCode="68655146-843D-4FB4-B3A9-A5EE2401B385"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Glance is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="GlanceIcon" SourceFile="$(var.PublishDir)\Glance.exe" />
+    <Property Id="ARPPRODUCTICON" Value="GlanceIcon" />
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Glance" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="GlanceMenuFolder" Name="Glance" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Glance" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcutComponent" />
+    </Feature>
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.PublishDir)\**" />
+    </ComponentGroup>
+
+    <Component Id="StartMenuShortcutComponent"
+               Directory="GlanceMenuFolder"
+               Guid="78800C24-95E8-4C7E-9CBA-026411230E82">
+      <Shortcut Id="GlanceStartMenuShortcut"
+                Name="Glance"
+                Description="Lightweight PDF viewer"
+                Target="[INSTALLFOLDER]Glance.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="RemoveGlanceMenuFolder" Directory="GlanceMenuFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\Glance" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+  </Package>
+</Wix>

@@ -1,0 +1,106 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Rust
+        shell: pwsh
+        run: |
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version
+          cargo --version
+
+      # Must pass --target explicitly: without it cargo writes to target/release/
+      # and the C# build looks in target/<triple>/release/.
+      - name: Build native library
+        shell: pwsh
+        working-directory: native/glance-native
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      # Trimming is unsafe for WinUI 3's XAML reflection; the csproj turns it on
+      # for non-Debug publish, so it is explicitly disabled here.
+      - name: Publish app
+        shell: pwsh
+        run: >
+          dotnet publish src/Glance.csproj
+          -c Release -r win-x64 --self-contained true -p:Platform=x64
+          -p:PublishTrimmed=false -p:PublishReadyToRun=false
+
+      # Pinned to v5: WiX v7 refuses to run without accepting the Open Source
+      # Maintenance Fee EULA, which is a licensing decision for the repo owner.
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version "5.*"
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add -g WixToolset.UI.wixext/5.0.2
+
+      - name: Determine version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $raw = $env:GITHUB_REF -replace '^refs/tags/v', ''
+          } else {
+            $raw = "0.0.0.$env:GITHUB_RUN_NUMBER"
+          }
+          # MSI ProductVersion must be purely numeric, so drop any -prerelease suffix.
+          $parts = ($raw -split '-')[0] -split '\.'
+          $parts = @($parts | Where-Object { $_ -match '^\d+$' })
+          while ($parts.Count -lt 4) { $parts += '0' }
+          $version = ($parts[0..3]) -join '.'
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "MSI version: $version"
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $pub = (Resolve-Path "src/bin/x64/Release/net10.0-windows10.0.26100.0/win-x64/publish").Path
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $out = "dist/Glance-${{ steps.ver.outputs.version }}-x64.msi"
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" build installer/Glance.wxs `
+            -arch x64 `
+            -d Version=${{ steps.ver.outputs.version }} `
+            -d "PublishDir=$pub" `
+            -ext WixToolset.UI.wixext `
+            -o $out
+          if (-not (Test-Path $out)) { throw "MSI was not produced" }
+          Get-Item $out | Select-Object Name, Length
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Glance-x64-msi
+          path: dist/*.msi
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $msi = (Get-ChildItem dist/*.msi).FullName
+          gh release create $env:GITHUB_REF_NAME $msi `
+            --title "Glance $env:GITHUB_REF_NAME" `
+            --generate-notes
