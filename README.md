@@ -7,177 +7,183 @@
 [![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows_11-blue.svg)](https://www.microsoft.com/windows/)
 [![Language: C#](https://img.shields.io/badge/Language-C%23-green.svg)](https://learn.microsoft.com/en-us/dotnet/csharp/)
 
-<a href="https://apps.microsoft.com/detail/9P387LMMCCTB" target="_blank">
-  <img src="https://developer.microsoft.com/en-us/store/badges/images/English_get-it-from-MS.png" alt="Get it from Microsoft Store" height="40" />
-</a>
+A fast, lightweight PDF viewer for Windows 11, built on WinUI 3 with a Rust rendering
+backend. It aims for the speed of a classic document viewer with first-class support for
+modern input — precision touchpads, pen and multi-touch — and annotation tools that write
+back into the file.
 
-Glance is a fast, lightweight, and elegant PDF document viewer designed specifically for Windows 11. Built from the ground up following Fluent Design principles, it offers a visually integrated experience featuring Mica transparency and smooth transitions. It combines the speed and minimalist design of classic document viewers like GNOME Evince with modern annotation tools inspired by Adobe Acrobat.
-
-<!-- ![Glance Demo](docs/img/Glance.gif) -->
+> **This is a fork of [jonas1ara/Glance](https://github.com/jonas1ara/Glance).** All work
+> before September 2026 is the original author's. This fork diverges on distribution
+> (unpackaged MSI rather than a Store package), input handling and viewer features; it is
+> not affiliated with the upstream project and is not the build published on the
+> Microsoft Store.
 
 ---
 
-## Key Features
+## Install
 
-* **Premium Aesthetics and Fluent Design:**
-  * Native use of Windows 11 Mica backdrop that adapts dynamically to the user's desktop wallpaper.
-  * Integrated window title bar and translucent sidebar for an immersive reading experience.
-  * Full support for automatic light and dark system themes.
-* **Visual Welcome Screen (Evince-style):**
-  * Grid layout displaying recent documents using cover page thumbnails rendered from the first page of each PDF.
-  * Single-click quick access to recently opened files with automatic registry cleanup if files are moved or deleted.
-* **Side-by-Side Comparison (Split View):**
-  * Compare two PDF documents side-by-side dynamically with synchronous vertical layout grids.
-  * Clear comparison toggle that safely restores localized viewer states on close.
-* **Freehand Drawing Tools:**
-  * Smooth digital freehand ink drawing with a rounded pen pointer (PenMode), ideal for digital signatures, sketches, or writing handwritten notes directly on the page.
-* **Precision Highlighter Tool:**
-  * Accurate text selection highlight mapping.
-  * Dynamic 7-color palette (Yellow, Green, Cyan, Magenta, Red, Blue, Black) that appears exclusively in editing modes.
-  * Automatic Alpha channel calculation (31% opacity) to ensure the translucent color highlights the text without obscuring the original content.
-* **Sticky Notes:**
-  * Drop floating comment bubbles anywhere on the PDF with a clean popover overlay to write, view, edit, and store reader remarks.
-* **System Language Localization:**
-  * Automatic interface localization detection (Spanish and English supported natively).
-* **Interactive Close and Save Flow:**
-  * Prompts users with a localized 3-button confirmation ("Save and Exit", "Exit without saving", "Cancel") if unsaved changes exist and auto-save is off, preventing data loss.
-* **Auto-saving Annotations:**
-  * All notes, highlights, and freehand drawing strokes are saved automatically to a local JSON database upon pointer release, ensuring immediate persistence.
-* **Real-time Document Rotation:**
-  * Native rotation controls to rotate the document in 90-degree increments, dynamically updating dimensions to prevent page clipping.
-* **Keyboard Shortcuts (Undo):**
-  * Full edit history with support for undoing annotations using the universal Ctrl + Z shortcut.
-* **Fluent Sidebar Index:**
-  * Navigation via high-definition page thumbnails rendered sequentially to prevent visual layout scrambling during UI virtualization recycling.
+Download the MSI from the [latest release](https://github.com/dkadavarath/Glance/releases/latest)
+and run it. It installs to `Program Files` and adds a Start Menu shortcut.
+
+* **x64 only.** ARM64 builds from the same source (see below) but is not published.
+* **The installer is unsigned**, so SmartScreen will warn on first run — *More info* →
+  *Run anyway*.
+* Installing a newer version replaces the old one; no need to uninstall first.
+
+Glance registers itself as a PDF handler, so it appears under *Open with* and in
+**Settings → Default apps**. It does not take over `.pdf` unless you tell Windows to.
+
+---
+
+## Features
+
+**Reading**
+
+* Continuous, single-page and two-page layouts, remembered between sessions.
+* Full screen on <kbd>F11</kbd>, <kbd>Esc</kbd> to leave.
+* Zoom anchored on the cursor or the page centre, whichever you prefer — the setting is
+  in the Settings flyout. Pages stay centred whenever they fit the window.
+* Side-by-side comparison of two documents.
+* Sidebar index of page thumbnails, and a recent-documents welcome screen with covers
+  rendered from each file's first page.
+* Text search, 90° rotation, and light/dark themes that follow the system.
+
+**Input**
+
+* Pinch to zoom, two-finger pan, and a sideways swipe to turn pages in single-page mode.
+* <kbd>Alt</kbd> + wheel scrolls horizontally; hold <kbd>Space</kbd> for a hand tool that
+  drags the page and glides to a stop.
+* Pen draws and rejects palm contacts; a second finger pans rather than corrupting a
+  stroke in progress. Pointer state is tracked per contact, so multi-touch does not
+  confuse the drawing tools.
+
+**Annotating**
+
+* Freehand ink, highlights with a 7-colour palette and adjustable opacity, sticky notes
+  and an eraser.
+* Annotations persist immediately to a local JSON store as you draw, and are written into
+  the PDF itself when you save.
+* <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, and a save prompt on exit when there are unsaved
+  changes and auto-save is off.
+
+**Elsewhere**
+
+* Opens files from *Open with*, the command line, and drag-and-drop onto the window.
+* Mica backdrop and an integrated title bar.
+* Interface follows the system language; English and Spanish are supported.
+
+### Known limitations
+
+* Ink and highlights are painted into the page content when saved, so other readers see
+  them but cannot select or edit them. Only sticky notes become real PDF annotations.
+* No stamps or signature images yet, no printing, and links are not clickable. Text and
+  images cannot be selected or copied. These are in progress.
 
 ---
 
 ## Architecture
 
-Glance uses a **hybrid C# + Rust architecture** for optimal performance:
+A hybrid C# and Rust application:
 
-* **Frontend:** WinUI 3 (C#/.NET 10.0) - Native Windows 11 aesthetics with Mica backdrop
-* **Backend:** Rust - Native performance for PDF rendering and storage
-* **Bridge:** P/Invoke FFI - Type-safe C# ↔ Rust interop
+* **Frontend:** WinUI 3 on .NET 10, targeting `net10.0-windows10.0.26100.0`.
+* **Backend:** a Rust `cdylib` wrapping PDFium for rendering, annotation validation and
+  persistence.
+* **Bridge:** P/Invoke, in `src/Interop/GlanceNative.cs`.
+* **Saving:** PDFsharp, in `src/Services/PdfExportService.cs`, writes annotations back
+  into the document.
+
+### Libraries
+
+**Frontend (.NET / C#)**
+
+* [Windows App SDK (WinUI 3)](https://github.com/microsoft/microsoft-ui-xaml) — the UI framework.
+* [PDFsharp](https://github.com/empira/PDFsharp) — burns annotations into the original PDF.
+
+**Backend and FFI (Rust)**
+
+* [windows-rs](https://github.com/microsoft/windows-rs) — Windows API projections for Rust.
+* [pdfium-render](https://github.com/ajrcarey/pdfium-render) — safe bindings around PDFium.
+* [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) — prebuilt PDFium, pinned
+  to 151.0.7920 for both architectures.
+
+**Packaging**
+
+* [WiX Toolset](https://wixtoolset.org/) v5 — builds the MSI in `installer/Glance.wxs`.
 
 ---
 
-## Libraries & Key Dependencies
+## System requirements
 
-Glance relies on several open-source libraries and native projections to achieve high-performance rendering, PDF manipulations, and native platform integration:
-
-### Frontend (.NET / C#)
-* **[Windows App SDK (WinUI 3)](https://github.com/microsoft/microsoft-ui-xaml):** The modern Fluent user interface framework for native Windows desktop development.
-* **[PDFsharp](https://github.com/empira/PDFsharp):** The open-source .NET library used for compiling and burning user drawings, highlights, and annotations back into the original PDF files.
-
-### Backend & FFI (Rust)
-* **[windows-rs](https://github.com/microsoft/windows-rs):** Microsoft's official Rust projection library, providing native access to Windows APIs directly from Rust.
-* **[pdfium-render](https://github.com/ajrcarey/pdfium-render):** A safe Rust binding layer around Google's PDFium.
-* **[pdfium-binaries](https://github.com/bblanchon/pdfium-binaries):** The pre-compiled binary distributions of Google's PDFium library (compiled by Benoît Blanchon) used to build the unmanaged rendering backend.
-
----
-
-## System Requirements
-
-* **OS:** Windows 10 or later
-* **Platform:** Windows App SDK 1.5+ (WinUI 3)
-* **Runtime:** .NET 10.0
+* **OS:** Windows 11. Built against the 26100 SDK; older builds are untested.
+* **Architecture:** x64 for released binaries.
+* Nothing else to install — the MSI is self-contained and carries its own .NET runtime.
 
 ---
 
 <details>
-<summary><strong>📚 Development & Building (For Contributors)</strong></summary>
+<summary><strong>📚 Development and building</strong></summary>
 
 ### Prerequisites
 
-* **.NET 10.0 SDK** - [dotnet.microsoft.com](https://dotnet.microsoft.com)
-* **Rust 1.70+** - [rustup.rs](https://rustup.rs)
-* **Visual Studio 2022** (optional)
+* **.NET 10 SDK** — [dotnet.microsoft.com](https://dotnet.microsoft.com)
+* **Rust 1.85+** — [rustup.rs](https://rustup.rs). The crate is edition 2024.
+* **Visual Studio 2022 Build Tools** with the Desktop C++ workload and the Windows 11
+  SDK — the MSVC linker is required even though the app is managed.
+* **Developer Mode** enabled.
 
-### Build Instructions
+### Build
 
-1. Clone repository:
-   ```bash
-   git clone https://github.com/jonas1ara/Glance.git
-   cd Glance
-   ```
-
-2. Add the Rust targets you intend to build (once per machine):
-   ```bash
-   rustup target add x86_64-pc-windows-msvc
-   rustup target add aarch64-pc-windows-msvc   # only if targeting ARM64
-   ```
-
-3. Build Rust backend. **Always pass `--target` explicitly**, including for your host
-   architecture — without it cargo writes to `target/release/` instead of
-   `target/<triple>/release/`, and the C# build will not find the DLL:
-   ```bash
-   cd native/glance-native
-   cargo build --release --target x86_64-pc-windows-msvc
-   ```
-   *(Release mode is required; the C# project only looks in `release/`.)*
-
-4. Build and Run C# frontend:
-   ```bash
-   cd ../../src
-   dotnet run --project Glance.csproj
-   ```
-   *(MSBuild copies the architecture-matched `glance_native.dll` and `pdfium.dll` into the
-   output directory automatically, so no manual file copying is needed.)*
-
-### Targeting ARM64
-
-Both supported architectures build from this one codebase — there is no separate ARM64
-project. Managed code is architecture-neutral; only the two native DLLs vary, and both
-are resolved per-RID by `src/Glance.csproj`.
+Rust first. The C# build fails without the native library.
 
 ```bash
-# Native libraries, one per architecture
-cargo build --release --target x86_64-pc-windows-msvc
-cargo build --release --target aarch64-pc-windows-msvc
+git clone https://github.com/dkadavarath/Glance.git
+cd Glance
 
-# Managed app, one per architecture
-dotnet publish src/Glance.csproj -c Release -r win-x64
+rustup target add x86_64-pc-windows-msvc
+
+cd native/glance-native
+cargo build --release --target x86_64-pc-windows-msvc
+cd ../..
+
+dotnet run --project src/Glance.csproj
+```
+
+**Always pass `--target` explicitly**, including for your host architecture. Without it
+cargo writes to `target/release/` while the C# build looks in `target/<triple>/release/`.
+Release mode is required even for Debug C# builds, for the same reason.
+
+MSBuild copies the architecture-matched `glance_native.dll` and `pdfium.dll` into the
+output directory, so nothing needs copying by hand.
+
+### Packaging
+
+```powershell
+dotnet publish src\Glance.csproj -c Release -r win-x64 --self-contained true `
+  -p:Platform=x64 -p:PublishTrimmed=false -p:PublishReadyToRun=false
+
+$pub = (Resolve-Path "src\bin\x64\Release\net10.0-windows10.0.26100.0\win-x64\publish").Path
+wix build installer\Glance.wxs -arch x64 -d Version=1.0.0.0 -d "PublishDir=$pub" `
+  -ext WixToolset.UI.wixext -o "dist\Glance-1.0.0-x64.msi"
+```
+
+Trimming and ReadyToRun are disabled deliberately: the csproj turns both on for non-Debug
+publishes, and trimming breaks WinUI 3's XAML reflection. WiX is pinned to v5 because v7
+will not run without accepting the Open Source Maintenance Fee EULA.
+
+Pushing a `v*` tag builds the MSI in CI and attaches it to a GitHub release.
+
+### ARM64
+
+Both architectures build from this one codebase — managed code is architecture-neutral
+and only the two native DLLs vary, resolved per-RID by `src/Glance.csproj`.
+
+```bash
+cargo build --release --target aarch64-pc-windows-msvc
 dotnet publish src/Glance.csproj -c Release -r win-arm64
 ```
 
-Cross-compiling to ARM64 from an x64 machine requires the
-`Microsoft.VisualStudio.Component.VC.Tools.ARM64` component in the Visual Studio installer.
-
-Prebuilt `pdfium.dll` binaries for both architectures live under
-`src/runtimes/<arch>/native/`. Both are pinned to the same PDFium release (151.0.7920) —
-keep them version-matched, or rendering will differ between architectures.
-
-For distribution, publish both and combine them into a single `.msixbundle`; Windows
-serves the correct payload per device from one Store listing.
-
-### Architecture Phases
-
-- **Phase 1: FFI Foundation (P/Invoke bridge)** ✅
-  * Established C-compatible unmanaged boundaries.
-  * Registered dynamic DLL resolvers (`NativeLibrary.SetDllImportResolver`) to locate Glance backend binaries.
-- **Phase 2: Persistence (JSON file I/O)** ✅
-  * Engineered Rust-side serialization adaptors using Serde.
-  * Formulated local drawing database formats to store vectors, comments, and marks.
-- **Phase 3: Annotation Processing (validation, geometry)** ✅
-  * Formulated validation rules for comments, highlights, and colors.
-  * Created safety checks for drawing coordinates.
-- **Phase 4: PDF Rendering (lazy loading, async)** ✅
-  * Integrated Google PDFium via dynamic library binding.
-  * Designed async rendering buffers on C# thread pools using `CancellationToken` loops to prevent thread collisions.
-- **Phase 5: Localization & UX Polish** ✅
-  * Integrated operating system locale detector.
-  * Formulated localized interactive exit confirmation dialog flows (Save, Discard, Cancel).
-
-### Build Variants
-
-- **Debug:** `cargo build --release --target <triple> && dotnet build`
-- **Release:** `cargo build --release --target <triple> && dotnet build -c Release`
-- **Clean:** `cargo clean && dotnet clean`
-
-Where `<triple>` is `x86_64-pc-windows-msvc` or `aarch64-pc-windows-msvc`. Note that the
-Rust library is built in release mode even for Debug C# builds — the project only resolves
-`target/<triple>/release/`.
+Cross-compiling from x64 needs the `Microsoft.VisualStudio.Component.VC.Tools.ARM64`
+component in the Visual Studio installer. CI builds x64 only, so ARM64 is untested.
 
 </details>
 
@@ -185,4 +191,4 @@ Rust library is built in release mode even for Debug C# builds — the project o
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for details.
+MIT, inherited from the upstream project. See [LICENSE](LICENSE).
