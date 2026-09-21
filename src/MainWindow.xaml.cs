@@ -46,12 +46,46 @@ public sealed partial class MainWindow : Window
             System.Diagnostics.Debug.WriteLine($"Failed to get activation args: {ex.Message}");
         }
 
+
+        // Unpackaged builds do not receive File activation unless the association was
+        // registered through the WinAppSDK at runtime. The MSI registers it in the
+        // registry instead, so Explorer's "Open with" launches us with the path as a
+        // plain command-line argument -- which is what actually arrives in practice.
+        string? pathToOpen = fileToOpen == null ? TryGetPdfPathFromCommandLine() : null;
+
         // Navigate the root frame to the main page on startup.
-        RootFrame.Navigate(typeof(MainPage), fileToOpen);
+        RootFrame.Navigate(typeof(MainPage), (object?)fileToOpen ?? pathToOpen);
 
         // Subscribe to closing event to check for unsaved changes
         this.AppWindow.Closing += AppWindow_Closing;
         this.VisibilityChanged += MainWindow_VisibilityChanged;
+    }
+
+    /// <summary>
+    /// The first existing .pdf path on the command line, or null. Explorer passes the
+    /// file this way both for a registry-registered association and for a drop onto the
+    /// executable.
+    /// </summary>
+    private static string? TryGetPdfPathFromCommandLine()
+    {
+        try
+        {
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 1; i < args.Length; i++) // [0] is our own executable
+            {
+                string candidate = args[i].Trim('"');
+                if (candidate.Length == 0) continue;
+                if (candidate[0] is '-' or '/') continue; // a switch, not a path
+                if (!candidate.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)) continue;
+                if (System.IO.File.Exists(candidate)) return System.IO.Path.GetFullPath(candidate);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to read command line: {ex.Message}");
+        }
+
+        return null;
     }
 
     [System.Runtime.InteropServices.DllImport("psapi.dll")]

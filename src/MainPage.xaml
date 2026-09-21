@@ -7,7 +7,8 @@
     xmlns:local="using:Glance"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Background="Transparent">
+    Background="Transparent"
+    KeyboardAcceleratorPlacementMode="Hidden">
 
     <Page.KeyboardAccelerators>
         <KeyboardAccelerator Key="Z" Modifiers="Control" Invoked="Undo_Invoked"/>
@@ -15,7 +16,7 @@
         <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="Search_Invoked"/>
     </Page.KeyboardAccelerators>
 
-    <Grid RowDefinitions="Auto, *">
+    <Grid RowDefinitions="Auto, *" AllowDrop="True" DragOver="MainPage_DragOver" Drop="MainPage_Drop">
         <!-- Fluent Design Header Bar: Translucent / Transparent to show window Mica background -->
         <Border Grid.Row="0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" Padding="12,6" Background="Transparent">
             <Grid ColumnDefinitions="Auto, *, Auto">
@@ -168,6 +169,15 @@
                                             <ComboBoxItem x:Name="ThemeLightItem" Content="Claro" Tag="Light"/>
                                             <ComboBoxItem x:Name="ThemeDarkItem" Content="Oscuro" Tag="Dark"/>
                                             <ComboBoxItem x:Name="ThemeDefaultItem" Content="Predeterminado del sistema" Tag="Default"/>
+                                        </ComboBox>
+                                    </StackPanel>
+
+                                    <!-- Zoom Anchor Selector -->
+                                    <StackPanel Spacing="6">
+                                        <TextBlock x:Name="ZoomAnchorLabel" Text="Zoom centers on" FontSize="12" Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"/>
+                                        <ComboBox x:Name="ZoomAnchorComboBox" SelectionChanged="ZoomAnchorComboBox_SelectionChanged" HorizontalAlignment="Stretch" SelectedIndex="0">
+                                            <ComboBoxItem x:Name="ZoomAnchorCursorItem" Content="The cursor" Tag="Cursor"/>
+                                            <ComboBoxItem x:Name="ZoomAnchorCenterItem" Content="The page center" Tag="PageCenter"/>
                                         </ComboBox>
                                     </StackPanel>
 

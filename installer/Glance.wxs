@@ -28,11 +28,40 @@
     <Feature Id="Main" Title="Glance" Level="1">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="StartMenuShortcutComponent" />
+      <ComponentRef Id="FileAssociationComponent" />
     </Feature>
 
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Files Include="$(var.PublishDir)\**" />
     </ComponentGroup>
+
+    <!--
+      File association. An unpackaged app gets none of this from its manifest, so the
+      ProgId, the Open-with entry and the Default-Apps capability are all registered
+      here and removed on uninstall with the component.
+
+      shell\open\command passes "%1" as a plain argument: that is what the app reads,
+      not a WinAppSDK File activation.
+    -->
+    <Component Id="FileAssociationComponent" Directory="INSTALLFOLDER" Guid="3C1F6A20-51E5-4E5C-9E02-8B23A9D4F7C1">
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Classes\Glance.pdf" Type="string" Value="PDF Document" KeyPath="yes" />
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Classes\Glance.pdf\DefaultIcon" Type="string" Value="[INSTALLFOLDER]Glance.exe,0" />
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Classes\Glance.pdf\shell\open" Name="FriendlyAppName" Type="string" Value="Glance" />
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Classes\Glance.pdf\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]Glance.exe&quot; &quot;%1&quot;" />
+
+      <!-- Offers Glance in the Open-with list without seizing the default. -->
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Classes\.pdf\OpenWithProgids" Name="Glance.pdf" Type="string" Value="" />
+
+      <!-- Makes Glance selectable in Settings > Default apps. -->
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Glance\Capabilities" Name="ApplicationName" Type="string" Value="Glance" />
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Glance\Capabilities" Name="ApplicationDescription" Type="string" Value="Lightweight PDF viewer" />
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Glance\Capabilities\FileAssociations" Name=".pdf" Type="string" Value="Glance.pdf" />
+      <RegistryValue Root="HKLM" Key="SOFTWARE\RegisteredApplications" Name="Glance" Type="string" Value="SOFTWARE\Glance\Capabilities" />
+
+      <!-- Lets the app be launched as just "Glance" and tells the shell it takes a path. -->
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Glance.exe" Type="string" Value="[INSTALLFOLDER]Glance.exe" />
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Classes\Applications\Glance.exe\SupportedTypes" Name=".pdf" Type="string" Value="" />
+    </Component>
 
     <Component Id="StartMenuShortcutComponent"
                Directory="GlanceMenuFolder"

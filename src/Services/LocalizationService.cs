@@ -96,7 +96,13 @@ namespace Glance.Services
                 ["ExitWithoutSaving"] = "Salir sin guardar",
                 ["Cancel"] = "Cancelar",
                 ["Home"] = "Inicio",
-                ["HomeTooltip"] = "Inicio / Archivos recientes"
+                ["HomeTooltip"] = "Inicio / Archivos recientes",
+                ["Page"] = "Página",
+                ["SaveCopy"] = "Guardar Copia",
+                ["DropToOpen"] = "Soltar para abrir",
+                ["ZoomAnchor"] = "El zoom se centra en",
+                ["ZoomAnchorCursor"] = "El cursor",
+                ["ZoomAnchorCenter"] = "El centro de la página"
             },
             ["en"] = new()
             {
@@ -152,7 +158,13 @@ namespace Glance.Services
                 ["ExitWithoutSaving"] = "Exit without saving",
                 ["Cancel"] = "Cancel",
                 ["Home"] = "Home",
-                ["HomeTooltip"] = "Home / Recent files"
+                ["HomeTooltip"] = "Home / Recent files",
+                ["Page"] = "Page",
+                ["SaveCopy"] = "Save Copy",
+                ["DropToOpen"] = "Drop to open",
+                ["ZoomAnchor"] = "Zoom centers on",
+                ["ZoomAnchorCursor"] = "The cursor",
+                ["ZoomAnchorCenter"] = "The page center"
             }
         };
 

@@ -44,6 +44,7 @@ public sealed partial class MainPage : Page
     public bool HasUnsavedChanges { get; set; } = false;
 
     private Windows.Storage.StorageFile? _pendingFileToLoad;
+    private string? _pendingPathToLoad;
 
     protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
     {
@@ -51,6 +52,12 @@ public sealed partial class MainPage : Page
         if (e.Parameter is Windows.Storage.StorageFile file)
         {
             _pendingFileToLoad = file;
+        }
+        else if (e.Parameter is string path && !string.IsNullOrWhiteSpace(path))
+        {
+            // Came from the command line or a file association, so we have a path rather
+            // than a StorageFile; resolving it needs an await, which happens on Loaded.
+            _pendingPathToLoad = path;
         }
     }
 
@@ -133,11 +140,25 @@ public sealed partial class MainPage : Page
     {
         InitializeSettings();
         InitializeLocalization();
+        InitializeInput();
         if (_pendingFileToLoad != null)
         {
-            DocTitleText.Text = _pendingFileToLoad.Name;
-            await LoadPdfAsync(_pendingFileToLoad);
+            var pending = _pendingFileToLoad;
             _pendingFileToLoad = null;
+            await OpenPdfFileAsync(pending);
+        }
+        else if (_pendingPathToLoad != null)
+        {
+            string pendingPath = _pendingPathToLoad;
+            _pendingPathToLoad = null;
+            try
+            {
+                await OpenPdfFileAsync(await StorageFile.GetFileFromPathAsync(pendingPath));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to open '{pendingPath}': {ex.Message}");
+            }
         }
     }
 
@@ -187,6 +208,9 @@ public sealed partial class MainPage : Page
             // Settings Panel
             if (SettingsTitleText != null) SettingsTitleText.Text = Glance.Services.LocalizationService.Get("Settings");
             if (AppThemeLabel != null) AppThemeLabel.Text = Glance.Services.LocalizationService.Get("AppTheme");
+            if (ZoomAnchorLabel != null) ZoomAnchorLabel.Text = Glance.Services.LocalizationService.Get("ZoomAnchor");
+            if (ZoomAnchorCursorItem != null) ZoomAnchorCursorItem.Content = Glance.Services.LocalizationService.Get("ZoomAnchorCursor");
+            if (ZoomAnchorCenterItem != null) ZoomAnchorCenterItem.Content = Glance.Services.LocalizationService.Get("ZoomAnchorCenter");
 
             if (ThemeLightItem != null) ThemeLightItem.Content = Glance.Services.LocalizationService.Get("ThemeLight");
             if (ThemeDarkItem != null) ThemeDarkItem.Content = Glance.Services.LocalizationService.Get("ThemeDark");
@@ -650,7 +674,7 @@ public sealed partial class MainPage : Page
             {
                 Title = "No se pudo sobrescribir",
                 Content = "No se pudo sobrescribir el archivo original. ¿Deseas guardar una copia en otra ubicación?",
-                PrimaryButtonText = "Guardar Copia",
+                PrimaryButtonText = Glance.Services.LocalizationService.Get("SaveCopy"),
                 CloseButtonText = "Cancelar",
                 XamlRoot = this.XamlRoot
             };
@@ -1548,7 +1572,7 @@ public sealed partial class MainPage : Page
                 break;
         }
 
-        PdfScrollViewer.ChangeView(null, null, zoomFactor);
+        ApplyZoom(zoomFactor, ResolveZoomAnchor());
     }
 
 
@@ -1672,6 +1696,8 @@ public sealed partial class MainPage : Page
         }
     }
 
+
+
     private void PdfScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
     {
         if (_isScrollingProgrammatically)
@@ -1679,19 +1705,17 @@ public sealed partial class MainPage : Page
             if (!e.IsIntermediate)
             {
                 _isScrollingProgrammatically = false;
-                GC.Collect();
-                UpdateVisiblePages();
+                RequestVisiblePagesUpdate(immediate: true);
             }
             return;
         }
         if (_pdfRenderService == null || _totalPages == 0 || _pages.Count == 0) return;
 
-        if (!e.IsIntermediate)
-        {
-            GC.Collect();
-        }
-
-        UpdateVisiblePages();
+        // Intermediate events fire continuously through a pinch or a flick, and
+        // UpdateVisiblePages walks every page and kicks off renders. Running it on each
+        // one is what makes zooming stutter and the page appear to jump, so throttle
+        // during the gesture and do the real pass once the view settles.
+        RequestVisiblePagesUpdate(immediate: !e.IsIntermediate);
     }
 
     private void PdfScrollViewerRight_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
@@ -1959,6 +1983,7 @@ public sealed partial class MainPage : Page
     // Canvas Pointer Events for Drawing
     private void Canvas_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
+        if (_handToolArmed) return; // space-bar hand tool owns the pointer
         if (_currentMode == EditMode.Navigate) return;
         if (sender is not FrameworkElement element) return;
         if (element.DataContext is not PdfPageViewModel pageVm) return;
@@ -2816,7 +2841,7 @@ public class PdfPageViewModel : INotifyPropertyChanged
         set => SetProperty(ref _rotationAngle, value);
     }
 
-    public string PageNumberText => $"Página {PageIndex + 1}";
+    public string PageNumberText => $"{Glance.Services.LocalizationService.Get("Page")} {PageIndex + 1}";
     public ObservableCollection<AnnotationViewModel> Annotations { get; set; } = new();
     public ObservableCollection<SearchHighlightViewModel> SearchHighlights { get; set; } = new();
 
