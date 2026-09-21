@@ -233,7 +233,7 @@ public sealed partial class MainPage : Page
     {
         try
         {
-            var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+            var localSettings = AppData.LocalSettings;
             
             // Load theme
             string themeStr = "Default";
@@ -296,7 +296,7 @@ public sealed partial class MainPage : Page
 
                 try
                 {
-                    var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+                    var localSettings = AppData.LocalSettings;
                     localSettings.Values["AppTheme"] = themeStr;
                 }
                 catch { }
@@ -310,7 +310,7 @@ public sealed partial class MainPage : Page
         
         try
         {
-            var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+            var localSettings = AppData.LocalSettings;
             localSettings.Values["AutoSaveOnExit"] = AutoSaveToggle.IsOn;
         }
         catch { }
@@ -351,7 +351,7 @@ public sealed partial class MainPage : Page
             bool autoSave = true;
             try
             {
-                var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+                var localSettings = AppData.LocalSettings;
                 if (localSettings.Values.TryGetValue("AutoSaveOnExit", out object? autoSaveValue) && autoSaveValue is bool savedAutoSave)
                 {
                     autoSave = savedAutoSave;
@@ -626,7 +626,7 @@ public sealed partial class MainPage : Page
                 System.Diagnostics.Debug.WriteLine($"Error silent saving PDF: {ex.Message}");
                 try
                 {
-                    string logPath = Path.Combine(Windows.Storage.ApplicationData.Current.LocalFolder.Path, "save_error.txt");
+                    string logPath = Path.Combine(AppData.LocalPath, "save_error.txt");
                     File.WriteAllText(logPath, $"Time: {DateTime.Now}\nError: {ex.Message}\nStack: {ex.StackTrace}\nInner: {ex.InnerException?.Message}");
                 }
                 catch { }
@@ -1188,7 +1188,7 @@ public sealed partial class MainPage : Page
                         try
                         {
                             string safeName = _currentPdfPath.Replace(":", "_").Replace("\\", "_").Replace("/", "_");
-                            string thumbPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, $"thumb_{safeName}.png");
+                            string thumbPath = Path.Combine(AppData.LocalPath, $"thumb_{safeName}.png");
                             using (var fileStream = File.Create(thumbPath))
                             {
                                 fileStream.Write(pngBytes, 0, pngBytes.Length);
@@ -1238,7 +1238,7 @@ public sealed partial class MainPage : Page
                 try
                 {
                     string safeName = _currentPdfPath.Replace(":", "_").Replace("\\", "_").Replace("/", "_");
-                    string thumbPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, $"thumb_{safeName}.png");
+                    string thumbPath = Path.Combine(AppData.LocalPath, $"thumb_{safeName}.png");
 
                     renderStream.Seek(0);
                     using (var fileStream = File.Create(thumbPath))
@@ -1372,7 +1372,7 @@ public sealed partial class MainPage : Page
                     await page.RenderToStreamAsync(tempThumbStream);
                     
                     string safeName = file.Path.Replace(":", "_").Replace("\\", "_").Replace("/", "_");
-                    string thumbPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, $"thumb_{safeName}.png");
+                    string thumbPath = Path.Combine(AppData.LocalPath, $"thumb_{safeName}.png");
                     
                     using (var outStream = File.Create(thumbPath))
                     {
@@ -2320,7 +2320,7 @@ public sealed partial class MainPage : Page
                 });
             }
             string json = System.Text.Json.JsonSerializer.Serialize(savedList);
-            string recentPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, "recent_files.json");
+            string recentPath = Path.Combine(AppData.LocalPath, "recent_files.json");
             File.WriteAllText(recentPath, json);
         }
         catch { }
@@ -2331,7 +2331,7 @@ public sealed partial class MainPage : Page
         try
         {
             _recentDocs.Clear();
-            string recentPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, "recent_files.json");
+            string recentPath = Path.Combine(AppData.LocalPath, "recent_files.json");
             if (!File.Exists(recentPath))
             {
                 UpdateRecentHeaderVisibility();
@@ -2518,7 +2518,7 @@ public sealed partial class MainPage : Page
     private string GetAnnotationFilePath(string pdfPath)
     {
         string safeName = pdfPath.Replace(":", "_").Replace("\\", "_").Replace("/", "_");
-        string localFolder = ApplicationData.Current.LocalFolder.Path;
+        string localFolder = AppData.LocalPath;
         return Path.Combine(localFolder, $"{safeName}.json");
     }
 

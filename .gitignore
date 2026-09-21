@@ -57,6 +57,13 @@ CHECK_DLL_DEPENDENCIES.ps1
 2026-07-04-desktop-vs-web-part-1.md
 2026-07-05-desktop-vs-web-part-2.md
 
+# Rust build output
+native/glance-native/target/
+
+# Installer output
+dist/
+src/packaging_outputs.txt
+
 # Cryptographic keys and certificates
 *.pfx
 *.cer

@@ -94,7 +94,7 @@ public sealed partial class MainWindow : Window
                 bool autoSave = true;
                 try
                 {
-                    var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+                    var localSettings = Glance.Services.AppData.LocalSettings;
                     if (localSettings.Values.TryGetValue("AutoSaveOnExit", out object? autoSaveValue) && autoSaveValue is bool savedAutoSave)
                     {
                         autoSave = savedAutoSave;
