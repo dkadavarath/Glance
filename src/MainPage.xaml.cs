@@ -1750,7 +1750,10 @@ public sealed partial class MainPage : Page
 
     private void PdfScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
     {
-        UpdatePageCentering();
+        // Only once the view settles. Correcting mid-gesture means chasing the zoom a
+        // frame behind it, which reads as jitter; zoom we drive ourselves sets the
+        // centring up front instead, in ApplyZoom.
+        if (!e.IsIntermediate) UpdatePageCentering();
 
         if (_isScrollingProgrammatically)
         {

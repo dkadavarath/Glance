@@ -113,20 +113,30 @@ public sealed partial class MainPage
     /// (viewport - content * zoom) / 2, which stays centred as the zoom changes rather
     /// than drifting.
     /// </remarks>
-    private void UpdatePageCentering()
+    private void UpdatePageCentering() =>
+        SetCenteringOffset(ComputeCenteringOffset(PdfScrollViewer?.ZoomFactor ?? 1.0f));
+
+    /// <summary>
+    /// How far the pages must be pushed across to sit centred at a given zoom, in
+    /// unzoomed units — the transform is applied before the zoom scales it, so x here
+    /// lands x * zoom pixels across. Zero once the pages are wider than the window,
+    /// where panning takes over.
+    /// </summary>
+    private double ComputeCenteringOffset(double zoom)
     {
         var sv = PdfScrollViewer;
-        if (sv == null || PagesRepeater == null) return;
-
-        double zoom = sv.ZoomFactor;
+        if (sv == null || PagesRepeater == null) return 0;
         if (zoom <= 0) zoom = 1.0;
 
         double contentWidth = PagesRepeater.ActualWidth;
-        if (contentWidth <= 0 || sv.ViewportWidth <= 0) return;
+        if (contentWidth <= 0 || sv.ViewportWidth <= 0) return _pagesCenterTransform.X;
 
         double offset = ((sv.ViewportWidth / zoom) - contentWidth) / 2.0;
-        if (offset < 0) offset = 0; // wider than the window: pan instead
+        return offset < 0 ? 0 : offset;
+    }
 
+    private void SetCenteringOffset(double offset)
+    {
         if (Math.Abs(_pagesCenterTransform.X - offset) > 0.5)
         {
             _pagesCenterTransform.X = offset;
@@ -152,14 +162,22 @@ public sealed partial class MainPage
 
         Point anchor = viewportAnchor ?? new Point(sv.ViewportWidth / 2, sv.ViewportHeight / 2);
 
-        // Offsets are in zoomed content space, so divide out the old zoom to get the
-        // document point under the anchor, then re-multiply by the new one.
-        double contentX = (sv.HorizontalOffset + anchor.X) / oldZoom;
+        // The centring offset moves with the zoom, so it has to be part of this
+        // calculation and has to be applied in the same frame. Reacting to the zoom
+        // afterwards is what made this jitter: the view zoomed, the page went sideways,
+        // and the correction landed a frame later, every frame.
+        double oldCentering = _pagesCenterTransform.X;
+        double newCentering = ComputeCenteringOffset(targetZoom);
+
+        // Offsets are in zoomed content space. Divide out the old zoom and the old
+        // centring to get the document point under the anchor, then put the new ones back.
+        double contentX = ((sv.HorizontalOffset + anchor.X) / oldZoom) - oldCentering;
         double contentY = (sv.VerticalOffset + anchor.Y) / oldZoom;
 
-        double newHorizontal = contentX * targetZoom - anchor.X;
-        double newVertical = contentY * targetZoom - anchor.Y;
+        double newHorizontal = ((contentX + newCentering) * targetZoom) - anchor.X;
+        double newVertical = (contentY * targetZoom) - anchor.Y;
 
+        SetCenteringOffset(newCentering);
         sv.ChangeView(Math.Max(0, newHorizontal), Math.Max(0, newVertical), targetZoom, true);
     }
 
