@@ -6,6 +6,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Windows.Foundation;
+using PointerDeviceType = Microsoft.UI.Input.PointerDeviceType;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -81,11 +82,22 @@ public sealed partial class MainPage : Page
     
     // Annotation states
     private EditMode _currentMode = EditMode.Navigate;
-    private bool _isDrawingHighlight = false;
-    private bool _isErasing = false;
-    private Point _startPoint;
-    private AnnotationViewModel? _activeHighlight;
     private string _activeColorHex = "#FFFF00"; // Default Yellow
+
+    // One session per contact, keyed by PointerId. A second finger or a pen landing
+    // mid-stroke must not corrupt the stroke already in flight.
+    private sealed class PointerSession
+    {
+        public required PointerDeviceType Device { get; init; }
+        public required EditMode Mode { get; init; }
+        public required PdfPageViewModel Page { get; init; }
+        public AnnotationViewModel? Annotation { get; init; }
+        public Point StartPoint { get; init; }
+        public FrameworkElement? CaptureTarget { get; init; }
+        public Pointer? Pointer { get; init; }
+    }
+
+    private readonly Dictionary<uint, PointerSession> _pointerSessions = new();
 
     // Undo/Redo history stack
     private List<(PdfPageViewModel Page, AnnotationViewModel Annotation)> _annotationHistory = new();
@@ -1948,18 +1960,48 @@ public sealed partial class MainPage : Page
     private void Canvas_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         if (_currentMode == EditMode.Navigate) return;
+        if (sender is not FrameworkElement element) return;
+        if (element.DataContext is not PdfPageViewModel pageVm) return;
 
-        var element = sender as FrameworkElement;
-        if (element == null) return;
-        
-        var pageVm = element.DataContext as PdfPageViewModel;
-        if (pageVm == null) return;
+        uint id = e.Pointer.PointerId;
+        var device = e.Pointer.PointerDeviceType;
+        var pointerPoint = e.GetCurrentPoint(element);
 
-        var point = e.GetCurrentPoint(element).Position;
+        switch (device)
+        {
+            case PointerDeviceType.Touch:
+                // A pen mid-stroke owns the drawing; concurrent touches are palm.
+                if (HasActiveSession(PointerDeviceType.Pen)) return;
+                // A second finger means pan/zoom. Roll back the tentative stroke and
+                // leave the gesture unhandled so the ScrollViewer can take it.
+                if (HasActiveSession(PointerDeviceType.Touch))
+                {
+                    DiscardTouchSessions();
+                    return;
+                }
+                break;
+
+            case PointerDeviceType.Pen:
+                DiscardTouchSessions();
+                break;
+
+            case PointerDeviceType.Mouse:
+                if (!pointerPoint.Properties.IsLeftButtonPressed) return;
+                break;
+        }
+
+        var point = pointerPoint.Position;
 
         if (_currentMode == EditMode.Eraser)
         {
-            _isErasing = true;
+            _pointerSessions[id] = new PointerSession
+            {
+                Device = device,
+                Mode = EditMode.Eraser,
+                Page = pageVm,
+                CaptureTarget = element,
+                Pointer = e.Pointer
+            };
             EraseAtPoint(pageVm, point);
             element.CapturePointer(e.Pointer);
             e.Handled = true;
@@ -1968,27 +2010,7 @@ public sealed partial class MainPage : Page
 
         HasUnsavedChanges = true;
 
-        if (_currentMode == EditMode.Highlight)
-        {
-            _isDrawingHighlight = true;
-            _startPoint = point;
-            
-            _activeHighlight = new AnnotationViewModel
-            {
-                Type = AnnotationType.Highlight,
-                X = point.X,
-                Y = point.Y,
-                Width = 0,
-                Height = 0,
-                ColorHex = GetActiveColorHexWithOpacity()
-            };
-            pageVm.Annotations.Add(_activeHighlight);
-            _annotationHistory.Add((pageVm, _activeHighlight));
-            
-            element.CapturePointer(e.Pointer);
-            e.Handled = true;
-        }
-        else if (_currentMode == EditMode.Note)
+        if (_currentMode == EditMode.Note)
         {
             var note = new AnnotationViewModel
             {
@@ -2001,11 +2023,25 @@ public sealed partial class MainPage : Page
             _annotationHistory.Add((pageVm, note));
             _ = SaveAnnotationsAsync();
             e.Handled = true;
+            return;
+        }
+
+        AnnotationViewModel annotation;
+        if (_currentMode == EditMode.Highlight)
+        {
+            annotation = new AnnotationViewModel
+            {
+                Type = AnnotationType.Highlight,
+                X = point.X,
+                Y = point.Y,
+                Width = 0,
+                Height = 0,
+                ColorHex = GetActiveColorHexWithOpacity()
+            };
         }
         else if (_currentMode == EditMode.Pen)
         {
-            _isDrawingHighlight = true; // Use drawing flag
-            _activeHighlight = new AnnotationViewModel
+            annotation = new AnnotationViewModel
             {
                 Type = AnnotationType.Pen,
                 X = 0, // No translation needed for absolute polyline coordinates
@@ -2013,83 +2049,122 @@ public sealed partial class MainPage : Page
                 ColorHex = GetActiveColorHexWithOpacity(),
                 Thickness = ThicknessSlider != null ? ThicknessSlider.Value : 3.5
             };
-            _activeHighlight.PointsCollection.Add(point);
-            pageVm.Annotations.Add(_activeHighlight);
-            _annotationHistory.Add((pageVm, _activeHighlight));
-
-            element.CapturePointer(e.Pointer);
-            e.Handled = true;
+            annotation.PointsCollection.Add(point);
         }
+        else
+        {
+            return;
+        }
+
+        pageVm.Annotations.Add(annotation);
+        _annotationHistory.Add((pageVm, annotation));
+        _pointerSessions[id] = new PointerSession
+        {
+            Device = device,
+            Mode = _currentMode,
+            Page = pageVm,
+            Annotation = annotation,
+            StartPoint = point,
+            CaptureTarget = element,
+            Pointer = e.Pointer
+        };
+
+        element.CapturePointer(e.Pointer);
+        e.Handled = true;
     }
 
     private void Canvas_PointerMoved(object sender, PointerRoutedEventArgs e)
     {
-        if (_currentMode == EditMode.Eraser && _isErasing)
+        if (!_pointerSessions.TryGetValue(e.Pointer.PointerId, out var session)) return;
+        if (sender is not FrameworkElement element) return;
+
+        var point = e.GetCurrentPoint(element).Position;
+
+        if (session.Mode == EditMode.Eraser)
         {
-            var element = sender as FrameworkElement;
-            if (element != null)
+            EraseAtPoint(session.Page, point);
+        }
+        else if (session.Annotation is { } annotation)
+        {
+            if (session.Mode == EditMode.Highlight)
             {
-                var pageVm = element.DataContext as PdfPageViewModel;
-                if (pageVm != null)
-                {
-                    var point = e.GetCurrentPoint(element).Position;
-                    EraseAtPoint(pageVm, point);
-                }
+                annotation.X = Math.Min(session.StartPoint.X, point.X);
+                annotation.Y = Math.Min(session.StartPoint.Y, point.Y);
+                annotation.Width = Math.Abs(session.StartPoint.X - point.X);
+                annotation.Height = Math.Abs(session.StartPoint.Y - point.Y);
             }
-            e.Handled = true;
-            return;
+            else if (session.Mode == EditMode.Pen)
+            {
+                annotation.PointsCollection.Add(point);
+            }
         }
 
-        if (_isDrawingHighlight && _activeHighlight != null)
-        {
-            var element = sender as FrameworkElement;
-            if (element == null) return;
-
-            var currentPoint = e.GetCurrentPoint(element).Position;
-
-            if (_currentMode == EditMode.Highlight)
-            {
-                double x = Math.Min(_startPoint.X, currentPoint.X);
-                double y = Math.Min(_startPoint.Y, currentPoint.Y);
-                double w = Math.Abs(_startPoint.X - currentPoint.X);
-                double h = Math.Abs(_startPoint.Y - currentPoint.Y);
-
-                _activeHighlight.X = x;
-                _activeHighlight.Y = y;
-                _activeHighlight.Width = w;
-                _activeHighlight.Height = h;
-            }
-            else if (_currentMode == EditMode.Pen)
-            {
-                _activeHighlight.PointsCollection.Add(currentPoint);
-            }
-            
-            e.Handled = true;
-        }
+        e.Handled = true;
     }
 
     private void Canvas_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
-        if (_currentMode == EditMode.Eraser && _isErasing)
+        if (EndPointerSession(e, discard: false)) e.Handled = true;
+    }
+
+    private void Canvas_PointerCanceled(object sender, PointerRoutedEventArgs e)
+    {
+        EndPointerSession(e, discard: true);
+    }
+
+    private void Canvas_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+    {
+        EndPointerSession(e, discard: false);
+    }
+
+    private bool HasActiveSession(PointerDeviceType device) =>
+        _pointerSessions.Any(kv => kv.Value.Device == device);
+
+    private bool EndPointerSession(PointerRoutedEventArgs e, bool discard)
+    {
+        if (!_pointerSessions.Remove(e.Pointer.PointerId, out var session)) return false;
+
+        ReleaseSessionCapture(session);
+
+        if (discard)
         {
-            _isErasing = false;
-            var element = sender as FrameworkElement;
-            element?.ReleasePointerCapture(e.Pointer);
-            e.Handled = true;
-            return;
+            DiscardAnnotation(session);
+            return true;
         }
 
-        if (_isDrawingHighlight)
+        // EraseAtPoint persists each removal itself.
+        if (session.Mode != EditMode.Eraser) _ = SaveAnnotationsAsync();
+        return true;
+    }
+
+    private void DiscardTouchSessions()
+    {
+        foreach (uint id in _pointerSessions
+                     .Where(kv => kv.Value.Device == PointerDeviceType.Touch)
+                     .Select(kv => kv.Key)
+                     .ToList())
         {
-            _isDrawingHighlight = false;
-            _activeHighlight = null;
-            
-            var element = sender as FrameworkElement;
-            element?.ReleasePointerCapture(e.Pointer);
-            
-            _ = SaveAnnotationsAsync();
-            e.Handled = true;
+            if (_pointerSessions.Remove(id, out var session))
+            {
+                ReleaseSessionCapture(session);
+                DiscardAnnotation(session);
+            }
         }
+    }
+
+    private static void ReleaseSessionCapture(PointerSession session)
+    {
+        if (session.CaptureTarget != null && session.Pointer != null)
+        {
+            session.CaptureTarget.ReleasePointerCapture(session.Pointer);
+        }
+    }
+
+    private void DiscardAnnotation(PointerSession session)
+    {
+        if (session.Annotation == null) return;
+        session.Page.Annotations.Remove(session.Annotation);
+        _annotationHistory.RemoveAll(item => item.Annotation == session.Annotation);
     }
 
     private void EraseAtPoint(PdfPageViewModel pageVm, Point p)

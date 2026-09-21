@@ -322,6 +322,8 @@
                                                   PointerPressed="Canvas_PointerPressed"
                                                   PointerMoved="Canvas_PointerMoved"
                                                   PointerReleased="Canvas_PointerReleased"
+                                                  PointerCanceled="Canvas_PointerCanceled"
+                                                  PointerCaptureLost="Canvas_PointerCaptureLost"
                                                   DataContext="{x:Bind}">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
