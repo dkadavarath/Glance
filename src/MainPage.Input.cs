@@ -82,9 +82,11 @@ public sealed partial class MainPage
             new PointerEventHandler(PdfScrollViewer_PointerCaptureLost), true);
         PdfScrollViewer.PointerExited += PdfScrollViewer_PointerExited;
 
-        PagesRepeater.RenderTransform = _pagesCenterTransform;
         PdfScrollViewer.SizeChanged += (_, _) => UpdatePageCentering();
-        PagesRepeater.SizeChanged += (_, _) => UpdatePageCentering();
+
+        // Pinch: the ScrollViewer no longer does it.
+        PagesHost.ManipulationStarted += PagesHost_ManipulationStarted;
+        PagesHost.ManipulationDelta += PagesHost_ManipulationDelta;
 
         // Preview phase: the ScrollViewer treats Space as page-down, so a bubble-phase
         // handler would arrive after it had already scrolled.
@@ -92,98 +94,102 @@ public sealed partial class MainPage
         this.PreviewKeyUp += MainPage_PreviewKeyUp;
     }
 
-    // --------------------------------------------------------------- page centering
+    // ---------------------------------------------------------------------- zooming
 
-    private readonly TranslateTransform _pagesCenterTransform = new();
+    // Zoom is a layout property, not a transform on the ScrollViewer. Each page's box
+    // takes its scaled size, so the extent follows the zoom and centring, panning and
+    // scroll positions all fall out of ordinary layout. The ScrollViewer's own ZoomMode
+    // is off: driving it meant correcting the view after it had already moved, which is
+    // what made zooming jitter.
+    private const float MinZoom = 0.2f;
+    private const float MaxZoom = 6.0f;
 
-    /// <summary>
-    /// Keeps the pages centred whenever they fit the window.
-    /// </summary>
-    /// <remarks>
-    /// Two earlier attempts got this wrong in instructive ways. Sizing the host to the
-    /// viewport made the pages' position within the content depend on the zoom, so every
-    /// zoom step slid them sideways. Transforming the repeater while it was the
-    /// ScrollViewer's own content did nothing, the presenter owning that transform for
-    /// its zoom. The repeater now sits inside a host, so its transform is its own, and
-    /// the host is sized by the pages rather than the viewport, which is also what leaves
-    /// horizontal range to pan only once a page really is wider than the window.
-    ///
-    /// The offset is in unzoomed units because the transform is applied before the zoom
-    /// scales it: x here lands x * zoom pixels across. Rendered position works out at
-    /// (viewport - content * zoom) / 2, which stays centred as the zoom changes rather
-    /// than drifting.
-    /// </remarks>
-    private void UpdatePageCentering() =>
-        SetCenteringOffset(ComputeCenteringOffset(PdfScrollViewer?.ZoomFactor ?? 1.0f));
+    private float _zoomFactor = 1.0f;
 
-    /// <summary>
-    /// How far the pages must be pushed across to sit centred at a given zoom, in
-    /// unzoomed units — the transform is applied before the zoom scales it, so x here
-    /// lands x * zoom pixels across. Zero once the pages are wider than the window,
-    /// where panning takes over.
-    /// </summary>
-    private double ComputeCenteringOffset(double zoom)
+    internal float ZoomFactor => _zoomFactor;
+
+    private void UpdatePageCentering()
     {
+        // Keeping the host at least as wide as the viewport is the whole mechanism: the
+        // repeater centres inside it while the pages fit, and the extent only exceeds the
+        // viewport -- making panning possible -- once a page is genuinely wider. Viewport
+        // width does not depend on the zoom, so nothing here has to be resynchronised
+        // with it.
         var sv = PdfScrollViewer;
-        if (sv == null || PagesRepeater == null) return 0;
-        if (zoom <= 0) zoom = 1.0;
+        if (sv == null || PagesHost == null || sv.ViewportWidth <= 0) return;
 
-        double contentWidth = PagesRepeater.ActualWidth;
-        if (contentWidth <= 0 || sv.ViewportWidth <= 0) return _pagesCenterTransform.X;
-
-        double offset = ((sv.ViewportWidth / zoom) - contentWidth) / 2.0;
-        return offset < 0 ? 0 : offset;
-    }
-
-    private void SetCenteringOffset(double offset)
-    {
-        if (Math.Abs(_pagesCenterTransform.X - offset) > 0.5)
+        if (Math.Abs(PagesHost.MinWidth - sv.ViewportWidth) > 0.5)
         {
-            _pagesCenterTransform.X = offset;
+            PagesHost.MinWidth = sv.ViewportWidth;
         }
     }
 
-    // ---------------------------------------------------------------- zoom anchoring
-
     /// <summary>
-    /// Zooms to <paramref name="targetZoom"/> while keeping the document point under
-    /// <paramref name="viewportAnchor"/> stationary. A null anchor means the viewport centre.
+    /// Zooms to <paramref name="targetZoom"/>, keeping the content under
+    /// <paramref name="viewportAnchor"/> in place. A null anchor means the viewport centre.
     /// </summary>
     private void ApplyZoom(float targetZoom, Point? viewportAnchor)
     {
         var sv = PdfScrollViewer;
         if (sv == null) return;
 
-        float oldZoom = sv.ZoomFactor;
-        if (oldZoom <= 0) oldZoom = 1f;
+        targetZoom = Math.Clamp(targetZoom, MinZoom, MaxZoom);
 
-        targetZoom = Math.Clamp(targetZoom, sv.MinZoomFactor, sv.MaxZoomFactor);
+        float oldZoom = _zoomFactor;
+        if (oldZoom <= 0) oldZoom = 1f;
         if (Math.Abs(targetZoom - oldZoom) < 0.0005f) return;
 
         Point anchor = viewportAnchor ?? new Point(sv.ViewportWidth / 2, sv.ViewportHeight / 2);
+        double ratio = targetZoom / (double)oldZoom;
 
-        // The centring offset moves with the zoom, so it has to be part of this
-        // calculation and has to be applied in the same frame. Reacting to the zoom
-        // afterwards is what made this jitter: the view zoomed, the page went sideways,
-        // and the correction landed a frame later, every frame.
-        double oldCentering = _pagesCenterTransform.X;
-        double newCentering = ComputeCenteringOffset(targetZoom);
+        // Everything in the content scales by the same ratio, so the point under the
+        // anchor moves out from the origin by that ratio. Page spacing does not scale,
+        // which makes this approximate over long documents, but only by a few pixels.
+        double newHorizontal = ((sv.HorizontalOffset + anchor.X) * ratio) - anchor.X;
+        double newVertical = ((sv.VerticalOffset + anchor.Y) * ratio) - anchor.Y;
 
-        // Offsets are in zoomed content space. Divide out the old zoom and the old
-        // centring to get the document point under the anchor, then put the new ones back.
-        double contentX = ((sv.HorizontalOffset + anchor.X) / oldZoom) - oldCentering;
-        double contentY = (sv.VerticalOffset + anchor.Y) / oldZoom;
+        _zoomFactor = targetZoom;
+        foreach (var page in _pages) page.Scale = targetZoom;
 
-        double newHorizontal = ((contentX + newCentering) * targetZoom) - anchor.X;
-        double newVertical = (contentY * targetZoom) - anchor.Y;
-
-        SetCenteringOffset(newCentering);
-        sv.ChangeView(Math.Max(0, newHorizontal), Math.Max(0, newVertical), targetZoom, true);
+        // The new extent only exists after layout, so the scroll has to wait for it --
+        // otherwise the offsets are clamped against the old, smaller content.
+        _ = DispatcherQueue.TryEnqueue(() =>
+            sv.ChangeView(Math.Max(0, newHorizontal), Math.Max(0, newVertical), null, true));
     }
-
     /// <summary>The anchor implied by the current setting, or null for the viewport centre.</summary>
     private Point? ResolveZoomAnchor() =>
         _zoomAnchorMode == ZoomAnchorMode.Cursor ? _lastViewerPointerPosition : null;
+
+    /// <summary>Returns to 100% without moving the view sideways.</summary>
+    internal void ResetZoom()
+    {
+        _zoomFactor = 1.0f;
+        foreach (var page in _pages) page.Scale = 1.0;
+        UpdatePageCentering();
+    }
+
+    // The ScrollViewer's own zoom is off, so pinch is handled here. A precision touchpad
+    // sends Ctrl+wheel and goes through the wheel handler instead.
+    private float _pinchStartZoom = 1.0f;
+
+    private void PagesHost_ManipulationStarted(object sender, ManipulationStartedRoutedEventArgs e)
+    {
+        _pinchStartZoom = _zoomFactor;
+    }
+
+    private void PagesHost_ManipulationDelta(object sender, ManipulationDeltaRoutedEventArgs e)
+    {
+        float scale = (float)e.Cumulative.Scale;
+        if (scale <= 0) return;
+
+        // Anchored on the gesture's own centre, which is what the fingers expect,
+        // regardless of the cursor-versus-centre setting that applies to wheel zoom.
+        Point anchor = e.Position;
+        ApplyZoom(_pinchStartZoom * scale, anchor);
+        e.Handled = true;
+    }
+
+    // ------------------------------------------------------------- zoom anchor setting
 
     private void LoadZoomAnchorSetting()
     {
@@ -257,7 +263,7 @@ public sealed partial class MainPage
 
             // Exponential so each notch is a constant ratio: one 120-unit notch ~ 20%.
             float step = MathF.Pow(1.0015f, delta);
-            ApplyZoom(sv.ZoomFactor * step,
+            ApplyZoom(_zoomFactor * step,
                 _zoomAnchorMode == ZoomAnchorMode.Cursor ? point.Position : null);
             e.Handled = true;
             return;

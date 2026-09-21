@@ -1387,6 +1387,7 @@ public sealed partial class MainPage : Page
                     });
                 }
 
+                foreach (var page in _pages) page.Scale = _zoomFactor;
                 RefreshDisplayPages();
 
                 System.Diagnostics.Debug.WriteLine($"✓ Placeholders created. PDF ready");
@@ -1445,7 +1446,7 @@ public sealed partial class MainPage : Page
 
             // Reset zoom to 100% (default Index 2)
             ZoomComboBox.SelectedIndex = 2;
-            PdfScrollViewer.ChangeView(null, null, 1.0f);
+            ResetZoom();
         }
         catch (Exception ex)
         {
@@ -1526,18 +1527,16 @@ public sealed partial class MainPage : Page
         double targetOffset = 16.0; // PagesRepeater top margin (16)
         for (int i = 0; i < rowStart; i += pageStep)
         {
-            double rowHeight = _pages[i].PageHeight;
+            double rowHeight = _pages[i].DisplayHeight;
             if (pageStep == 2 && i + 1 < _pages.Count)
             {
-                rowHeight = Math.Max(rowHeight, _pages[i + 1].PageHeight);
+                rowHeight = Math.Max(rowHeight, _pages[i + 1].DisplayHeight);
             }
             targetOffset += rowHeight + 18.0 + 16.0; // item height + spacing
         }
 
-        double zoom = PdfScrollViewer.ZoomFactor;
-        if (zoom <= 0) zoom = 1.0;
-
-        PdfScrollViewer.ChangeView(null, targetOffset * zoom, null, true);
+        // Offsets are already in zoomed units: the zoom is baked into each page box.
+        PdfScrollViewer.ChangeView(null, targetOffset, null, true);
 
         // Fallback safety to reset the sync flag
         await Task.Delay(1000);
@@ -1592,8 +1591,12 @@ public sealed partial class MainPage : Page
             case 6: // Fit Width
                 if (_pdfRenderService != null && _totalPages > 0)
                 {
-                    // Standard letter width in points = 612
-                    double pageWidth = 612.0;
+                    // The page actually in view, not an assumed Letter width: A4 is 595
+                    // and a rotated page is wider still.
+                    double pageWidth = _pages.Count > 0
+                        ? _pages[Math.Clamp(_currentPageIndex, 0, _pages.Count - 1)].PageWidth
+                        : 612.0;
+                    if (pageWidth <= 0) pageWidth = 612.0;
                     double viewportWidth = PdfScrollViewer.ViewportWidth;
                     // Account for margin spacing (16 * 2 + scrollbars)
                     zoomFactor = (float)((viewportWidth - 48.0) / pageWidth);
@@ -1622,11 +1625,7 @@ public sealed partial class MainPage : Page
             return;
         }
 
-        double offset = PdfScrollViewer.VerticalOffset;
-        double zoom = PdfScrollViewer.ZoomFactor;
-        if (zoom <= 0) zoom = 1.0;
-
-        double currentOffset = offset / zoom;
+        double currentOffset = PdfScrollViewer.VerticalOffset;
         int activePageIndex = 0;
         double accumulatedHeight = 16.0; // PagesRepeater top margin (16)
         bool activePageFound = false;
@@ -1637,10 +1636,10 @@ public sealed partial class MainPage : Page
 
         for (int i = 0; i < _pages.Count; i += pageStep)
         {
-            double pageHeight = _pages[i].PageHeight;
+            double pageHeight = _pages[i].DisplayHeight;
             if (pageStep == 2 && i + 1 < _pages.Count)
             {
-                pageHeight = Math.Max(pageHeight, _pages[i + 1].PageHeight);
+                pageHeight = Math.Max(pageHeight, _pages[i + 1].DisplayHeight);
             }
             double itemHeight = pageHeight + 18.0; // border height + margin
 
@@ -2833,6 +2832,7 @@ public class PdfPageViewModel : INotifyPropertyChanged
 {
     private double _pageWidth;
     private double _pageHeight;
+    private double _scale = 1.0;
     private double _rotationAngle = 0.0;
     private int _pageIndex;
     private ImageSource? _imageSource;
@@ -2881,14 +2881,37 @@ public class PdfPageViewModel : INotifyPropertyChanged
     public double PageWidth
     {
         get => _pageWidth;
-        set => SetProperty(ref _pageWidth, value);
+        set { if (SetProperty(ref _pageWidth, value)) OnPropertyChanged(nameof(DisplayWidth)); }
     }
 
     public double PageHeight
     {
         get => _pageHeight;
-        set => SetProperty(ref _pageHeight, value);
+        set { if (SetProperty(ref _pageHeight, value)) OnPropertyChanged(nameof(DisplayHeight)); }
     }
+
+    /// <summary>
+    /// The zoom, as a layout property rather than a transform on the scroll viewer.
+    /// The page keeps its own size and is scaled by a render transform; the box around
+    /// it takes the scaled size, so the extent, centring and panning all follow from
+    /// ordinary layout.
+    /// </summary>
+    public double Scale
+    {
+        get => _scale;
+        set
+        {
+            if (SetProperty(ref _scale, value))
+            {
+                OnPropertyChanged(nameof(DisplayWidth));
+                OnPropertyChanged(nameof(DisplayHeight));
+            }
+        }
+    }
+
+    public double DisplayWidth => _pageWidth * _scale;
+
+    public double DisplayHeight => _pageHeight * _scale;
 
     public double RotationAngle
     {

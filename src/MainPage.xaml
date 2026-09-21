@@ -303,11 +303,11 @@
                     <ColumnDefinition x:Name="SecondaryViewerColumn" Width="0"/>
                 </Grid.ColumnDefinitions>
 
-                <ScrollViewer Grid.Column="0" x:Name="PdfScrollViewer" Background="Transparent" HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled" ZoomMode="Enabled" 
+                <ScrollViewer Grid.Column="0" x:Name="PdfScrollViewer" Background="Transparent" HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled" ZoomMode="Disabled" 
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" ViewChanged="PdfScrollViewer_ViewChanged">
-                    <!-- Host sizes to the pages, not the viewport, so there is horizontal range
-                         to pan only when a page is genuinely wider than the window. -->
-                    <Grid x:Name="PagesHost" Background="Transparent" HorizontalAlignment="Left">
+                    <!-- Host is kept at least as wide as the viewport, so the pages centre in
+                         it while they fit and only widen past it once zoomed in. -->
+                    <Grid x:Name="PagesHost" Background="Transparent" HorizontalAlignment="Left" ManipulationMode="Scale">
                     <ItemsRepeater x:Name="PagesRepeater" Margin="0,16" HorizontalAlignment="Center" ElementPrepared="PagesRepeater_ElementPrepared" ElementClearing="PagesRepeater_ElementClearing">
                     <ItemsRepeater.Layout>
                         <StackLayout Spacing="16"/>
@@ -316,10 +316,17 @@
                         <DataTemplate x:DataType="local:PdfPageViewModel">
                             <!-- Page container card: solid background (white/dark grey) floating over Mica backdrop -->
                             <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" Margin="16,8" HorizontalAlignment="Center">
-                                <!-- Grid matches logical PDF page bounds and supports rotation transforms -->
+                                <!-- Outer box carries the zoomed size so layout, and therefore the
+                                     extent, centring and panning, follow the zoom. -->
+                                <Grid Width="{x:Bind DisplayWidth, Mode=OneWay}" Height="{x:Bind DisplayHeight, Mode=OneWay}">
+                                <!-- Inner grid stays in page coordinates: annotations and hit testing
+                                     keep working unscaled, and the transform does the zooming. -->
                                 <Grid Width="{x:Bind PageWidth, Mode=OneWay}" Height="{x:Bind PageHeight, Mode=OneWay}" HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
                                     <Grid.RenderTransform>
-                                        <RotateTransform Angle="{x:Bind RotationAngle, Mode=OneWay}"/>
+                                        <TransformGroup>
+                                            <RotateTransform Angle="{x:Bind RotationAngle, Mode=OneWay}"/>
+                                            <ScaleTransform ScaleX="{x:Bind Scale, Mode=OneWay}" ScaleY="{x:Bind Scale, Mode=OneWay}"/>
+                                        </TransformGroup>
                                     </Grid.RenderTransform>
 
                                     <!-- The rendered page image -->
@@ -395,6 +402,7 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
+                                </Grid>
                                 </Grid>
                             </Border>
                         </DataTemplate>
