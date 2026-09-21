@@ -61,10 +61,14 @@ public sealed partial class MainPage
         // The wheel handler goes on the host, not the ScrollViewer. The ScrollViewer acts
         // on the wheel before the event bubbles to a handler there, so marking it handled
         // at that point is too late -- which is what made Alt+wheel scroll diagonally.
-        // The host is used rather than the repeater because it spans the whole viewport,
-        // so the modifier still applies when the cursor is beside the page rather than on
-        // it.
+        // It goes on the host rather than the repeater so it still fires over the padding
+        // around the pages.
         PagesHost.AddHandler(UIElement.PointerWheelChangedEvent,
+            new PointerEventHandler(Pages_PointerWheelChanged), false);
+
+        // Fallback for the space beside the pages, which belongs to the ScrollViewer
+        // rather than the host. It only fires if the host handler did not.
+        PdfScrollViewer.AddHandler(UIElement.PointerWheelChangedEvent,
             new PointerEventHandler(Pages_PointerWheelChanged), false);
 
         // These only observe, so handledEventsToo is right for them.
@@ -78,7 +82,9 @@ public sealed partial class MainPage
             new PointerEventHandler(PdfScrollViewer_PointerCaptureLost), true);
         PdfScrollViewer.PointerExited += PdfScrollViewer_PointerExited;
 
+        PagesRepeater.RenderTransform = _pagesCenterTransform;
         PdfScrollViewer.SizeChanged += (_, _) => UpdatePageCentering();
+        PagesRepeater.SizeChanged += (_, _) => UpdatePageCentering();
 
         // Preview phase: the ScrollViewer treats Space as page-down, so a bubble-phase
         // handler would arrive after it had already scrolled.
@@ -88,34 +94,42 @@ public sealed partial class MainPage
 
     // --------------------------------------------------------------- page centering
 
+    private readonly TranslateTransform _pagesCenterTransform = new();
+
     /// <summary>
-    /// Keeps the pages centred whenever they fit, and keeps panning unavailable until
-    /// they do not.
+    /// Keeps the pages centred whenever they fit the window.
     /// </summary>
     /// <remarks>
-    /// An earlier attempt offset the repeater with a render transform to avoid a layout
-    /// pass. It did not hold, and it could not have given the second half of the
-    /// behaviour: a transform does not change the extent, so the view stayed pannable
-    /// even with the whole page on screen. Sizing the host is what actually decides both.
+    /// Two earlier attempts got this wrong in instructive ways. Sizing the host to the
+    /// viewport made the pages' position within the content depend on the zoom, so every
+    /// zoom step slid them sideways. Transforming the repeater while it was the
+    /// ScrollViewer's own content did nothing, the presenter owning that transform for
+    /// its zoom. The repeater now sits inside a host, so its transform is its own, and
+    /// the host is sized by the pages rather than the viewport, which is also what leaves
+    /// horizontal range to pan only once a page really is wider than the window.
+    ///
+    /// The offset is in unzoomed units because the transform is applied before the zoom
+    /// scales it: x here lands x * zoom pixels across. Rendered position works out at
+    /// (viewport - content * zoom) / 2, which stays centred as the zoom changes rather
+    /// than drifting.
     /// </remarks>
     private void UpdatePageCentering()
     {
         var sv = PdfScrollViewer;
-        if (sv == null || PagesHost == null) return;
+        if (sv == null || PagesRepeater == null) return;
 
         double zoom = sv.ZoomFactor;
         if (zoom <= 0) zoom = 1.0;
-        if (sv.ViewportWidth <= 0) return;
 
-        // The host is measured before the zoom scales it, so a box that exactly fills the
-        // viewport is ViewportWidth / zoom wide here. At or above that width the extent
-        // matches the viewport, which leaves no horizontal range to pan; the repeater
-        // centres itself inside the host. Below it -- zoomed in past the window -- the
-        // pages decide the width and panning comes back.
-        double required = sv.ViewportWidth / zoom;
-        if (Math.Abs(PagesHost.MinWidth - required) > 1.0)
+        double contentWidth = PagesRepeater.ActualWidth;
+        if (contentWidth <= 0 || sv.ViewportWidth <= 0) return;
+
+        double offset = ((sv.ViewportWidth / zoom) - contentWidth) / 2.0;
+        if (offset < 0) offset = 0; // wider than the window: pan instead
+
+        if (Math.Abs(_pagesCenterTransform.X - offset) > 0.5)
         {
-            PagesHost.MinWidth = required;
+            _pagesCenterTransform.X = offset;
         }
     }
 
@@ -193,6 +207,8 @@ public sealed partial class MainPage
 
     private void Pages_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
+        if (e.Handled) return; // the host already dealt with it
+
         var sv = PdfScrollViewer;
         if (sv == null) return;
 

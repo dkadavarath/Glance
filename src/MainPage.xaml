@@ -305,9 +305,9 @@
 
                 <ScrollViewer Grid.Column="0" x:Name="PdfScrollViewer" Background="Transparent" HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled" ZoomMode="Enabled" 
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" ViewChanged="PdfScrollViewer_ViewChanged">
-                    <!-- Host stretches to at least the viewport width (set in code as the zoom
-                         changes) so the pages centre in it and cannot be panned while they fit. -->
-                    <Grid x:Name="PagesHost" Background="Transparent" HorizontalAlignment="Stretch">
+                    <!-- Host sizes to the pages, not the viewport, so there is horizontal range
+                         to pan only when a page is genuinely wider than the window. -->
+                    <Grid x:Name="PagesHost" Background="Transparent" HorizontalAlignment="Left">
                     <ItemsRepeater x:Name="PagesRepeater" Margin="0,16" HorizontalAlignment="Center" ElementPrepared="PagesRepeater_ElementPrepared" ElementClearing="PagesRepeater_ElementClearing">
                     <ItemsRepeater.Layout>
                         <StackLayout Spacing="16"/>
