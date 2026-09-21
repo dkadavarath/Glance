@@ -102,19 +102,54 @@ Glance relies on several open-source libraries and native projections to achieve
    cd Glance
    ```
 
-2. Build Rust backend:
+2. Add the Rust targets you intend to build (once per machine):
+   ```bash
+   rustup target add x86_64-pc-windows-msvc
+   rustup target add aarch64-pc-windows-msvc   # only if targeting ARM64
+   ```
+
+3. Build Rust backend. **Always pass `--target` explicitly**, including for your host
+   architecture — without it cargo writes to `target/release/` instead of
+   `target/<triple>/release/`, and the C# build will not find the DLL:
    ```bash
    cd native/glance-native
-   cargo build --release
+   cargo build --release --target x86_64-pc-windows-msvc
    ```
-   *(Note: Building in release mode is required as the C# project is configured to automatically look for the Rust DLL in `target/release/`).*
+   *(Release mode is required; the C# project only looks in `release/`.)*
 
-3. Build and Run C# frontend:
+4. Build and Run C# frontend:
    ```bash
    cd ../../src
    dotnet run --project Glance.csproj
    ```
-   *(Note: The MSBuild system automatically copies the compiled `glance_native.dll` and `pdfium.dll` to the output directory during build, so no manual file copying is needed).*
+   *(MSBuild copies the architecture-matched `glance_native.dll` and `pdfium.dll` into the
+   output directory automatically, so no manual file copying is needed.)*
+
+### Targeting ARM64
+
+Both supported architectures build from this one codebase — there is no separate ARM64
+project. Managed code is architecture-neutral; only the two native DLLs vary, and both
+are resolved per-RID by `src/Glance.csproj`.
+
+```bash
+# Native libraries, one per architecture
+cargo build --release --target x86_64-pc-windows-msvc
+cargo build --release --target aarch64-pc-windows-msvc
+
+# Managed app, one per architecture
+dotnet publish src/Glance.csproj -c Release -r win-x64
+dotnet publish src/Glance.csproj -c Release -r win-arm64
+```
+
+Cross-compiling to ARM64 from an x64 machine requires the
+`Microsoft.VisualStudio.Component.VC.Tools.ARM64` component in the Visual Studio installer.
+
+Prebuilt `pdfium.dll` binaries for both architectures live under
+`src/runtimes/<arch>/native/`. Both are pinned to the same PDFium release (151.0.7920) —
+keep them version-matched, or rendering will differ between architectures.
+
+For distribution, publish both and combine them into a single `.msixbundle`; Windows
+serves the correct payload per device from one Store listing.
 
 ### Architecture Phases
 
@@ -136,9 +171,13 @@ Glance relies on several open-source libraries and native projections to achieve
 
 ### Build Variants
 
-- **Debug:** `cargo build --debug && dotnet build`
-- **Release:** `cargo build --release && dotnet build -c Release`
+- **Debug:** `cargo build --release --target <triple> && dotnet build`
+- **Release:** `cargo build --release --target <triple> && dotnet build -c Release`
 - **Clean:** `cargo clean && dotnet clean`
+
+Where `<triple>` is `x86_64-pc-windows-msvc` or `aarch64-pc-windows-msvc`. Note that the
+Rust library is built in release mode even for Debug C# builds — the project only resolves
+`target/<triple>/release/`.
 
 </details>
 

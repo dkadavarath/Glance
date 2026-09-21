@@ -8,14 +8,16 @@ This document explains the architecture of the native PDFium dependency in Glanc
 
 Glance utilizes a dual-engine architecture where `pdfium.dll` serves as the underlying C++ rendering engine. You will find `pdfium.dll` in two locations within the repository, each serving a distinct purpose:
 
-### A. Frontend Runtime Directory (`src/pdfium.dll`)
-* **Purpose:** This copy is package-bound and ships to production.
-* **How it works:** When building the project, MSBuild references the file in `src/` as a **Content** item in `Glance.csproj`:
+### A. Frontend Runtime Directory (`src/runtimes/<arch>/native/pdfium.dll`)
+* **Purpose:** These copies are package-bound and ship to production — one per target architecture (`x64`, `arm64`).
+* **How it works:** MSBuild selects the architecture-matched binary via the `$(PdfiumDll)` property in `Glance.csproj`, which is derived from `RuntimeIdentifier`:
   ```xml
-  <Content Include="pdfium.dll">
+  <Content Include="$(PdfiumDll)">
     <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    <Link>pdfium.dll</Link>
   </Content>
   ```
+* **Version pinning:** Keep every architecture on the *same* PDFium release. A version skew between `x64` and `arm64` produces per-architecture rendering differences that are extremely hard to diagnose. Both are currently pinned to **151.0.7920**.
 * **DLL Search Path:** When `Glance.exe` starts, Windows loads our Rust library `glance_native.dll`. In turn, the Rust library dynamically loads `pdfium.dll`. Windows searches for native dependencies in the application's active executing directory. Copying `pdfium.dll` to the output folder ensures it is found at runtime.
 
 ### B. Rust Developer Directory (`native/glance-native/pdfium.dll`)
@@ -71,7 +73,7 @@ cargo test
 ### Step 5: Commit and Deploy
 Once validations pass, commit the updated binaries and submit the new MSIX package to the Microsoft Store:
 ```bash
-git add src/pdfium.dll native/glance-native/pdfium.dll
+git add src/runtimes/x64/native/pdfium.dll src/runtimes/arm64/native/pdfium.dll native/glance-native/pdfium.dll
 git commit -m "chore: update pdfium.dll to version [NEW_VERSION] for security and performance"
 git push origin master
 ```

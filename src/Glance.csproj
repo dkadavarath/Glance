@@ -6,7 +6,7 @@
     <RootNamespace>Glance</RootNamespace>
     <AssemblyName>Glance</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Platforms>x86;x64;ARM64</Platforms>
+    <Platforms>x64;ARM64</Platforms>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
     <PublishProfile Condition="Exists('Properties\PublishProfiles\win-$(Platform).pubxml')">win-$(Platform).pubxml</PublishProfile>
     <UseWinUI>true</UseWinUI>
@@ -19,6 +19,21 @@
     <SelfContained>true</SelfContained>
     <PublishSelfContained>true</PublishSelfContained>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+  </PropertyGroup>
+
+  <!--
+    Architecture mapping for native assets.
+    Derived from RuntimeIdentifier (not $(Platform)) because `dotnet publish -r win-arm64`
+    sets the RID without setting Platform, which would otherwise leave it as "AnyCPU"
+    and silently resolve the wrong native binaries.
+  -->
+  <PropertyGroup>
+    <NativeArch Condition="$(RuntimeIdentifier.EndsWith('-x64'))">x64</NativeArch>
+    <NativeArch Condition="$(RuntimeIdentifier.EndsWith('-arm64'))">arm64</NativeArch>
+    <RustTarget Condition="'$(NativeArch)' == 'x64'">x86_64-pc-windows-msvc</RustTarget>
+    <RustTarget Condition="'$(NativeArch)' == 'arm64'">aarch64-pc-windows-msvc</RustTarget>
+    <RustNativeDll>$(MSBuildThisFileDirectory)..\native\glance-native\target\$(RustTarget)\release\glance_native.dll</RustNativeDll>
+    <PdfiumDll>$(MSBuildThisFileDirectory)runtimes\$(NativeArch)\native\pdfium.dll</PdfiumDll>
   </PropertyGroup>
 
   <ItemGroup>
@@ -93,17 +108,17 @@
       <BuildScriptPath Condition="'$(SolutionDir)' != ''">$(SolutionDir)build\build-native.ps1</BuildScriptPath>
       <BuildScriptPath Condition="'$(SolutionDir)' == ''">$(MSBuildThisFileDirectory)..\build\build-native.ps1</BuildScriptPath>
     </PropertyGroup>
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(BuildScriptPath)&quot; -Configuration $(Configuration) -Platforms x64" ContinueOnError="true" />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(BuildScriptPath)&quot; -Configuration $(Configuration) -Platforms $(NativeArch)" ContinueOnError="true" />
   </Target>
 
   <!-- Include Native DLLs in Output -->
   <ItemGroup>
-    <!-- Copy from Rust build directory to C# output directory -->
-    <Content Include="..\native\glance-native\target\release\glance_native.dll">
+    <!-- Copy architecture-matched native binaries to the C# output directory -->
+    <Content Include="$(RustNativeDll)" Condition="Exists('$(RustNativeDll)')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>glance_native.dll</Link>
     </Content>
-    <Content Include="pdfium.dll">
+    <Content Include="$(PdfiumDll)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>pdfium.dll</Link>
     </Content>
@@ -111,9 +126,15 @@
 
   <!-- Post-build: Ensure DLLs are in the exe directory -->
   <Target Name="CopyNativeDll" AfterTargets="Build">
-    <Copy SourceFiles="..\native\glance-native\target\release\glance_native.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="pdfium.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
-    <Message Text="Copied native DLLs to $(OutputPath)" Importance="High" />
+    <Error Condition="'$(NativeArch)' == ''"
+           Text="Could not determine target architecture from RuntimeIdentifier '$(RuntimeIdentifier)'. Supported: win-x64, win-arm64." />
+    <Error Condition="!Exists('$(RustNativeDll)')"
+           Text="Rust native library not found for $(NativeArch) at '$(RustNativeDll)'.%0ABuild it first:%0A    cd native\glance-native%0A    cargo build --release --target $(RustTarget)" />
+    <Error Condition="!Exists('$(PdfiumDll)')"
+           Text="pdfium.dll not found for $(NativeArch) at '$(PdfiumDll)'." />
+    <Copy SourceFiles="$(RustNativeDll)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(PdfiumDll)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Message Text="Copied $(NativeArch) native DLLs to $(OutputPath)" Importance="High" />
   </Target>
 
   <!-- Exclude testing assets from final build and packaging to pass WACK -->
