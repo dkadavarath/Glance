@@ -45,13 +45,16 @@ Developer Mode enabled.
 Findings from a full read of the source (2026-09-20). None of these are
 speculative — each is a specific thing the code does or does not do.
 
-**Touch and trackpad — effectively absent.** No `ManipulationDelta`, no
-`PointerDeviceType` checks, no gesture recognizer anywhere. Pinch/pan comes free
-from `ScrollViewer ZoomMode="Enabled"` (`MainPage.xaml:283`) and nothing more.
-Drawing state is a single `bool _isDrawingHighlight` plus one `_activeHighlight`
-field (`MainPage.xaml.cs:1948`) — structurally single-pointer, so a second contact
-corrupts the first stroke. Handlers also set `e.Handled = true` unconditionally in
-edit modes, which suppresses the built-in pan the ScrollViewer would otherwise give.
+**Touch and trackpad — rewritten 2026-09-21, unverified on hardware.** Drawing
+state is now `Dictionary<uint, PointerSession>` keyed by `PointerId`
+(`MainPage.xaml.cs`), so a second contact no longer corrupts a stroke in flight.
+Pen draws and discards in-flight touch strokes (palm rejection); mouse draws on
+left button only; a second finger rolls back the tentative stroke and leaves the
+event unhandled for the `ScrollViewer`. `e.Handled` is set only when a session
+consumed the event, and `PointerCanceled`/`PointerCaptureLost` are handled.
+`MainPage.Input.cs` adds cursor-anchored zoom, Alt+wheel horizontal pan and a
+space-bar hand tool with inertia. None of the *feel* has been tested — this box
+has no digitizer or precision touchpad.
 
 **Ink is hand-rolled.** Strokes are `Polyline` shapes bound to an observable point
 collection (`MainPage.xaml:344`), position-only, no pressure or tilt, re-rendered on
@@ -83,16 +86,26 @@ working set without freeing anything. Cosmetic.
 `'static` lifetime on a self-referential struct. Field order makes drop order
 correct today, but it is fragile.
 
-**No tests, no CI.** `src/Tests/**` is excluded from compilation via
-`<Compile Remove>`; `TestDllLoad` is not in the solution. `.github/` holds only
-`funding.yml`. Unit tests are blocked until logic is extracted out of the
-2,990-line `MainPage.xaml.cs`.
+**No tests; CI builds but does not test.** `src/Tests/**` is excluded from
+compilation via `<Compile Remove>`; `TestDllLoad` is not in the solution.
+`.github/workflows/build.yml` builds and releases but runs nothing. Unit tests
+are still blocked until logic is extracted out of `MainPage.xaml.cs`.
 
 ## Decisions made
 
 - **Windows-only.** Cross-platform dropped; WinUI 3 cannot deliver it.
-- **x64 and ARM64, no x86.** One codebase, per-RID native assets, ship as a
-  single `.msixbundle`.
+- **Unpackaged, shipped as an MSI.** `<WindowsPackageType>None</WindowsPackageType>`,
+  installed by `installer/Glance.wxs`. An unsigned MSIX effectively will not install
+  whereas an unsigned MSI is ordinary, and it suits LTSC images with no Store. This
+  supersedes the `.msixbundle` plan.
+- **Storage goes through `Glance.Services.AppData`.** Unpackaged builds have no
+  package identity, so `Windows.Storage.ApplicationData.Current` throws. Its
+  replacement resolves a path without creating it — hence the directory creation
+  in `AppDataService.cs`. Never reintroduce `ApplicationData.Current`.
+- **WiX pinned to v5.** v7 is gated behind the Open Source Maintenance Fee EULA
+  (`WIX7015`), a licensing decision for the owner, not a build detail.
+- **CI is x64 only.** ARM64 was left out rather than adding cross-compilation that
+  could not be tested locally. Revisit when ARM64 hardware is available.
 - **pdfium pinned to 151.0.7920** for both architectures. Keep them version-matched
   — a skew causes per-arch rendering differences that are very hard to diagnose.
 - **Prefer platform APIs over hand-rolled input.** `InkPresenter` and
@@ -101,13 +114,17 @@ correct today, but it is fragile.
 
 ## Open items
 
-- `<WindowsPackageType>None</WindowsPackageType>` for local iteration — proposed,
-  not yet applied. Unpackaged launch is faster and avoids MSIX/Store dependencies,
-  which matters on LTSC images with no Microsoft Store. Owner wanted to approve first.
-- Input-layer rewrite: `InkPresenter` for strokes, `PointerId`-keyed state for
-  multi-contact, device-type routing, drop the blanket `e.Handled`.
-- Extract logic from `MainPage.xaml.cs` so unit tests become possible.
-- Stamp and signature-image annotation types.
+Requested by the owner, in rough priority order:
+
+- Stamp and signature-image annotations, burned into the saved PDF.
+- Print.
+- Clickable links, and text/image selection and copy. Both need new pdfium FFI
+  surface in the Rust layer, not just C# work.
+- Split, merge and resize documents.
+- `InkPresenter` for strokes — pressure, tilt, wet ink. Touches the persistence
+  format and `PdfExportService` as well as the input layer.
+- Continue extracting logic from `MainPage.xaml.cs` so unit tests become possible.
+  `MainPage.Input.cs` and `MainPage.ViewModes.cs` are a start.
 
 ## Testing constraints
 
