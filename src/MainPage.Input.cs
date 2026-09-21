@@ -58,10 +58,15 @@ public sealed partial class MainPage
     {
         LoadZoomAnchorSetting();
 
-        // handledEventsToo: the ScrollViewer marks pointer and wheel events handled for
-        // its own manipulation, so bubble-phase handlers would never see them.
-        PdfScrollViewer.AddHandler(UIElement.PointerWheelChangedEvent,
-            new PointerEventHandler(PdfScrollViewer_PointerWheelChanged), true);
+        // The wheel handler goes on the repeater, not the ScrollViewer. The ScrollViewer
+        // acts on the wheel before the event reaches it as a bubbling routed event, so a
+        // handler there runs too late to suppress it -- which is what made Alt+wheel
+        // scroll diagonally: the ScrollViewer had already scrolled vertically. Attaching
+        // to its content puts us ahead of it in the bubble, where Handled still counts.
+        PagesRepeater.AddHandler(UIElement.PointerWheelChangedEvent,
+            new PointerEventHandler(Pages_PointerWheelChanged), false);
+
+        // These only observe, so handledEventsToo is right for them.
         PdfScrollViewer.AddHandler(UIElement.PointerMovedEvent,
             new PointerEventHandler(PdfScrollViewer_PointerMoved), true);
         PdfScrollViewer.AddHandler(UIElement.PointerPressedEvent,
@@ -72,10 +77,47 @@ public sealed partial class MainPage
             new PointerEventHandler(PdfScrollViewer_PointerCaptureLost), true);
         PdfScrollViewer.PointerExited += PdfScrollViewer_PointerExited;
 
+        // Centre the page when it is narrower than the viewport. A render transform is
+        // used rather than a margin so this costs no layout pass during a pinch.
+        PagesRepeater.RenderTransform = _pagesCenterTransform;
+        PdfScrollViewer.SizeChanged += (_, _) => UpdatePageCentering();
+        PagesRepeater.SizeChanged += (_, _) => UpdatePageCentering();
+
         // Preview phase: the ScrollViewer treats Space as page-down, so a bubble-phase
         // handler would arrive after it had already scrolled.
         this.PreviewKeyDown += MainPage_PreviewKeyDown;
         this.PreviewKeyUp += MainPage_PreviewKeyUp;
+    }
+
+    // --------------------------------------------------------------- page centering
+
+    private readonly TranslateTransform _pagesCenterTransform = new();
+
+    /// <summary>
+    /// Keeps the page centred whenever it is narrower than the viewport, at any zoom.
+    /// The ScrollViewer pins content smaller than the viewport to the left, and zooming
+    /// out shrinks it towards that edge, so the offset has to be supplied here.
+    /// </summary>
+    private void UpdatePageCentering()
+    {
+        var sv = PdfScrollViewer;
+        if (sv == null || PagesRepeater == null) return;
+
+        double zoom = sv.ZoomFactor;
+        if (zoom <= 0) zoom = 1.0;
+
+        double contentWidth = PagesRepeater.ActualWidth;
+        if (contentWidth <= 0 || sv.ViewportWidth <= 0) return;
+
+        // The transform is applied before the zoom scales it, so work in unzoomed units:
+        // an offset of x here lands x * zoom pixels on screen.
+        double offset = ((sv.ViewportWidth / zoom) - contentWidth) / 2.0;
+        if (offset < 0) offset = 0;
+
+        if (Math.Abs(_pagesCenterTransform.X - offset) > 0.5)
+        {
+            _pagesCenterTransform.X = offset;
+        }
     }
 
     // ---------------------------------------------------------------- zoom anchoring
@@ -150,7 +192,7 @@ public sealed partial class MainPage
 
     // ------------------------------------------------------------------ wheel routing
 
-    private void PdfScrollViewer_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    private void Pages_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
         var sv = PdfScrollViewer;
         if (sv == null) return;
@@ -164,6 +206,8 @@ public sealed partial class MainPage
         if (modifiers.HasFlag(VirtualKeyModifiers.Control))
         {
             StopInertia();
+            StopSmoothHorizontalScroll();
+
             // Exponential so each notch is a constant ratio: one 120-unit notch ~ 20%.
             float step = MathF.Pow(1.0015f, delta);
             ApplyZoom(sv.ZoomFactor * step,
@@ -175,9 +219,12 @@ public sealed partial class MainPage
         if (modifiers.HasFlag(VirtualKeyModifiers.Menu))
         {
             StopInertia();
-            // Wheel-up (positive delta) scrolls left, matching Shift+wheel elsewhere.
-            sv.ChangeView(sv.HorizontalOffset - delta, null, null, true);
+
+            // Wheel-up scrolls left, as Shift+wheel does elsewhere. Eased towards the
+            // target rather than jumped, so it reads as scrolling and not teleporting.
+            ScrollHorizontallyBy(-delta);
             e.Handled = true;
+            return;
         }
 
         if (_viewMode == PageViewMode.SinglePage && modifiers == VirtualKeyModifiers.None)
@@ -194,6 +241,54 @@ public sealed partial class MainPage
                 e.Handled = true;
             }
         }
+    }
+
+    // ------------------------------------------------------- smooth horizontal scroll
+
+    private double _horizontalScrollTarget;
+    private bool _horizontalScrollAnimating;
+
+    /// <summary>Eases the view towards an accumulated horizontal target, so repeated
+    /// notches blend into one movement instead of a series of jumps.</summary>
+    private void ScrollHorizontallyBy(double delta)
+    {
+        var sv = PdfScrollViewer;
+        double max = Math.Max(0, sv.ScrollableWidth);
+        if (max <= 0) return;
+
+        double basis = _horizontalScrollAnimating ? _horizontalScrollTarget : sv.HorizontalOffset;
+        _horizontalScrollTarget = Math.Clamp(basis + delta, 0, max);
+
+        if (!_horizontalScrollAnimating)
+        {
+            _horizontalScrollAnimating = true;
+            CompositionTarget.Rendering += HorizontalScroll_Tick;
+        }
+    }
+
+    private void StopSmoothHorizontalScroll()
+    {
+        if (!_horizontalScrollAnimating) return;
+        _horizontalScrollAnimating = false;
+        CompositionTarget.Rendering -= HorizontalScroll_Tick;
+    }
+
+    private void HorizontalScroll_Tick(object? sender, object e)
+    {
+        var sv = PdfScrollViewer;
+        if (sv == null) { StopSmoothHorizontalScroll(); return; }
+
+        double current = sv.HorizontalOffset;
+        double remaining = _horizontalScrollTarget - current;
+
+        if (Math.Abs(remaining) < 0.5)
+        {
+            sv.ChangeView(_horizontalScrollTarget, null, null, true);
+            StopSmoothHorizontalScroll();
+            return;
+        }
+
+        sv.ChangeView(current + (remaining * 0.25), null, null, true);
     }
 
     // -------------------------------------------------------------------- hand tool
@@ -266,10 +361,10 @@ public sealed partial class MainPage
         {
             // ProtectedCursor is only settable on this element, so the hand applies to the
             // whole page while space is held rather than just over the viewer.
+            // Windows ships no open-hand cursor: IDC_HAND is the pointing finger, which
+            // reads as "click this link". SizeAll at least says "drag to move".
             this.ProtectedCursor = _handToolArmed
-                ? InputSystemCursor.Create(_handToolPanning
-                    ? InputSystemCursorShape.SizeAll
-                    : InputSystemCursorShape.Hand)
+                ? InputSystemCursor.Create(InputSystemCursorShape.SizeAll)
                 : null;
         }
         catch { }

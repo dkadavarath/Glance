@@ -1750,6 +1750,8 @@ public sealed partial class MainPage : Page
 
     private void PdfScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
     {
+        UpdatePageCentering();
+
         if (_isScrollingProgrammatically)
         {
             if (!e.IsIntermediate)
