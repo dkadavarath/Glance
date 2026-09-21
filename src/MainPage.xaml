@@ -305,7 +305,10 @@
 
                 <ScrollViewer Grid.Column="0" x:Name="PdfScrollViewer" Background="Transparent" HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled" ZoomMode="Enabled" 
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" ViewChanged="PdfScrollViewer_ViewChanged">
-                    <ItemsRepeater x:Name="PagesRepeater" Margin="0,16" ElementPrepared="PagesRepeater_ElementPrepared" ElementClearing="PagesRepeater_ElementClearing">
+                    <!-- Host stretches to at least the viewport width (set in code as the zoom
+                         changes) so the pages centre in it and cannot be panned while they fit. -->
+                    <Grid x:Name="PagesHost" Background="Transparent" HorizontalAlignment="Stretch">
+                    <ItemsRepeater x:Name="PagesRepeater" Margin="0,16" HorizontalAlignment="Center" ElementPrepared="PagesRepeater_ElementPrepared" ElementClearing="PagesRepeater_ElementClearing">
                     <ItemsRepeater.Layout>
                         <StackLayout Spacing="16"/>
                     </ItemsRepeater.Layout>
@@ -397,6 +400,7 @@
                         </DataTemplate>
                     </ItemsRepeater.ItemTemplate>
                 </ItemsRepeater>
+                    </Grid>
             </ScrollViewer>
 
                 <!-- Divider Line -->

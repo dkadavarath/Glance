@@ -58,12 +58,13 @@ public sealed partial class MainPage
     {
         LoadZoomAnchorSetting();
 
-        // The wheel handler goes on the repeater, not the ScrollViewer. The ScrollViewer
-        // acts on the wheel before the event reaches it as a bubbling routed event, so a
-        // handler there runs too late to suppress it -- which is what made Alt+wheel
-        // scroll diagonally: the ScrollViewer had already scrolled vertically. Attaching
-        // to its content puts us ahead of it in the bubble, where Handled still counts.
-        PagesRepeater.AddHandler(UIElement.PointerWheelChangedEvent,
+        // The wheel handler goes on the host, not the ScrollViewer. The ScrollViewer acts
+        // on the wheel before the event bubbles to a handler there, so marking it handled
+        // at that point is too late -- which is what made Alt+wheel scroll diagonally.
+        // The host is used rather than the repeater because it spans the whole viewport,
+        // so the modifier still applies when the cursor is beside the page rather than on
+        // it.
+        PagesHost.AddHandler(UIElement.PointerWheelChangedEvent,
             new PointerEventHandler(Pages_PointerWheelChanged), false);
 
         // These only observe, so handledEventsToo is right for them.
@@ -77,11 +78,7 @@ public sealed partial class MainPage
             new PointerEventHandler(PdfScrollViewer_PointerCaptureLost), true);
         PdfScrollViewer.PointerExited += PdfScrollViewer_PointerExited;
 
-        // Centre the page when it is narrower than the viewport. A render transform is
-        // used rather than a margin so this costs no layout pass during a pinch.
-        PagesRepeater.RenderTransform = _pagesCenterTransform;
         PdfScrollViewer.SizeChanged += (_, _) => UpdatePageCentering();
-        PagesRepeater.SizeChanged += (_, _) => UpdatePageCentering();
 
         // Preview phase: the ScrollViewer treats Space as page-down, so a bubble-phase
         // handler would arrive after it had already scrolled.
@@ -91,32 +88,34 @@ public sealed partial class MainPage
 
     // --------------------------------------------------------------- page centering
 
-    private readonly TranslateTransform _pagesCenterTransform = new();
-
     /// <summary>
-    /// Keeps the page centred whenever it is narrower than the viewport, at any zoom.
-    /// The ScrollViewer pins content smaller than the viewport to the left, and zooming
-    /// out shrinks it towards that edge, so the offset has to be supplied here.
+    /// Keeps the pages centred whenever they fit, and keeps panning unavailable until
+    /// they do not.
     /// </summary>
+    /// <remarks>
+    /// An earlier attempt offset the repeater with a render transform to avoid a layout
+    /// pass. It did not hold, and it could not have given the second half of the
+    /// behaviour: a transform does not change the extent, so the view stayed pannable
+    /// even with the whole page on screen. Sizing the host is what actually decides both.
+    /// </remarks>
     private void UpdatePageCentering()
     {
         var sv = PdfScrollViewer;
-        if (sv == null || PagesRepeater == null) return;
+        if (sv == null || PagesHost == null) return;
 
         double zoom = sv.ZoomFactor;
         if (zoom <= 0) zoom = 1.0;
+        if (sv.ViewportWidth <= 0) return;
 
-        double contentWidth = PagesRepeater.ActualWidth;
-        if (contentWidth <= 0 || sv.ViewportWidth <= 0) return;
-
-        // The transform is applied before the zoom scales it, so work in unzoomed units:
-        // an offset of x here lands x * zoom pixels on screen.
-        double offset = ((sv.ViewportWidth / zoom) - contentWidth) / 2.0;
-        if (offset < 0) offset = 0;
-
-        if (Math.Abs(_pagesCenterTransform.X - offset) > 0.5)
+        // The host is measured before the zoom scales it, so a box that exactly fills the
+        // viewport is ViewportWidth / zoom wide here. At or above that width the extent
+        // matches the viewport, which leaves no horizontal range to pan; the repeater
+        // centres itself inside the host. Below it -- zoomed in past the window -- the
+        // pages decide the width and panning comes back.
+        double required = sv.ViewportWidth / zoom;
+        if (Math.Abs(PagesHost.MinWidth - required) > 1.0)
         {
-            _pagesCenterTransform.X = offset;
+            PagesHost.MinWidth = required;
         }
     }
 
@@ -203,6 +202,20 @@ public sealed partial class MainPage
 
         var modifiers = e.KeyModifiers;
 
+        if (point.Properties.IsHorizontalMouseWheel)
+        {
+            // A tilt wheel arriving mid-glide would be fighting our own eased scroll, so
+            // hand control straight back to the wheel.
+            StopSmoothHorizontalScroll();
+
+            if (TryTurnPageSideways(delta > 0 ? 1 : -1))
+            {
+                e.Handled = true;
+            }
+
+            return; // otherwise let the ScrollViewer scroll it natively
+        }
+
         if (modifiers.HasFlag(VirtualKeyModifiers.Control))
         {
             StopInertia();
@@ -220,8 +233,14 @@ public sealed partial class MainPage
         {
             StopInertia();
 
+            if (TryTurnPageSideways(delta > 0 ? -1 : 1))
+            {
+                e.Handled = true;
+                return;
+            }
+
             // Wheel-up scrolls left, as Shift+wheel does elsewhere. Eased towards the
-            // target rather than jumped, so it reads as scrolling and not teleporting.
+            // target rather than jumped, so repeated notches read as one movement.
             ScrollHorizontallyBy(-delta);
             e.Handled = true;
             return;
@@ -243,10 +262,32 @@ public sealed partial class MainPage
         }
     }
 
+    /// <summary>
+    /// Turns the page when a sideways gesture has nowhere to scroll: in single-page mode
+    /// with the page fully on screen, sideways means "next page", not "nothing happens".
+    /// </summary>
+    private bool TryTurnPageSideways(int direction)
+    {
+        if (_viewMode != PageViewMode.SinglePage) return false;
+        if (PdfScrollViewer.ScrollableWidth > 1) return false; // there is room to scroll
+
+        return TurnPage(direction);
+    }
+
+    private bool TurnPage(int direction)
+    {
+        int target = _currentPageIndex + direction;
+        if (target < 0 || _totalPages == 0 || target >= _totalPages) return false;
+
+        NavigateToPage(target);
+        return true;
+    }
+
     // ------------------------------------------------------- smooth horizontal scroll
 
     private double _horizontalScrollTarget;
     private bool _horizontalScrollAnimating;
+    private double _lastAppliedHorizontalOffset = double.NaN;
 
     /// <summary>Eases the view towards an accumulated horizontal target, so repeated
     /// notches blend into one movement instead of a series of jumps.</summary>
@@ -270,6 +311,7 @@ public sealed partial class MainPage
     {
         if (!_horizontalScrollAnimating) return;
         _horizontalScrollAnimating = false;
+        _lastAppliedHorizontalOffset = double.NaN;
         CompositionTarget.Rendering -= HorizontalScroll_Tick;
     }
 
@@ -279,8 +321,17 @@ public sealed partial class MainPage
         if (sv == null) { StopSmoothHorizontalScroll(); return; }
 
         double current = sv.HorizontalOffset;
-        double remaining = _horizontalScrollTarget - current;
 
+        // If the view moved somewhere we did not put it, something else is driving it --
+        // a tilt wheel, a scrollbar, a touch pan -- and continuing would drag it back.
+        if (!double.IsNaN(_lastAppliedHorizontalOffset) &&
+            Math.Abs(current - _lastAppliedHorizontalOffset) > 12.0)
+        {
+            StopSmoothHorizontalScroll();
+            return;
+        }
+
+        double remaining = _horizontalScrollTarget - current;
         if (Math.Abs(remaining) < 0.5)
         {
             sv.ChangeView(_horizontalScrollTarget, null, null, true);
@@ -288,7 +339,9 @@ public sealed partial class MainPage
             return;
         }
 
-        sv.ChangeView(current + (remaining * 0.25), null, null, true);
+        double next = current + (remaining * 0.25);
+        sv.ChangeView(next, null, null, true);
+        _lastAppliedHorizontalOffset = next;
     }
 
     // -------------------------------------------------------------------- hand tool
@@ -299,6 +352,14 @@ public sealed partial class MainPage
         {
             ToggleFullScreen();
             e.Handled = true;
+            return;
+        }
+
+        // Arrows turn the page in single-page mode, where scrolling cannot reach the next.
+        if ((e.Key == VirtualKey.Left || e.Key == VirtualKey.Right) &&
+            _viewMode == PageViewMode.SinglePage && !IsKeyboardInputFocused())
+        {
+            if (TurnPage(e.Key == VirtualKey.Right ? 1 : -1)) e.Handled = true;
             return;
         }
 
@@ -373,6 +434,8 @@ public sealed partial class MainPage
     private void PdfScrollViewer_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         StopInertia();
+        StopSmoothHorizontalScroll();
+        BeginSwipeTracking(e);
 
         if (!_handToolArmed || _handToolPanning) return;
         if (e.Pointer.PointerDeviceType == PointerDeviceType.Touch) return; // touch already pans
@@ -401,6 +464,8 @@ public sealed partial class MainPage
         Point position = e.GetCurrentPoint(sv).Position;
         _lastViewerPointerPosition = position;
 
+        if (_swipeTracking && e.Pointer.PointerId == _swipePointerId) _swipeLast = position;
+
         if (!_handToolPanning) return;
 
         // Dragging the page right must move the content right, so offsets go the other way.
@@ -427,6 +492,12 @@ public sealed partial class MainPage
 
     private void PdfScrollViewer_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        if (EndSwipeTracking(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (!_handToolPanning) return;
 
         PdfScrollViewer.ReleasePointerCapture(e.Pointer);
@@ -436,6 +507,10 @@ public sealed partial class MainPage
 
     private void PdfScrollViewer_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
     {
+        // The ScrollViewer takes the pointer to pan, so a swipe usually ends here rather
+        // than in PointerReleased.
+        EndSwipeTracking(e);
+
         if (!_handToolPanning) return;
         EndHandPan(startInertia: false);
     }
@@ -515,6 +590,50 @@ public sealed partial class MainPage
         if (speed < InertiaMinSpeed) StopInertia();
     }
 
+
+    // ------------------------------------------------------------------- page swipes
+
+    // A sideways drag turns the page in single-page mode, where there is otherwise no way
+    // out of the current page by gesture alone.
+    private const double SwipeMinDistance = 60.0;
+    private const double SwipeDirectionRatio = 1.5;
+
+    private bool _swipeTracking;
+    private uint _swipePointerId;
+    private Point _swipeStart;
+    private Point _swipeLast;
+
+    private void BeginSwipeTracking(PointerRoutedEventArgs e)
+    {
+        _swipeTracking = false;
+        if (_viewMode != PageViewMode.SinglePage) return;
+        if (e.Pointer.PointerDeviceType != PointerDeviceType.Touch) return;
+        if (_handToolArmed) return;
+
+        _swipeTracking = true;
+        _swipePointerId = e.Pointer.PointerId;
+        _swipeStart = e.GetCurrentPoint(PdfScrollViewer).Position;
+        _swipeLast = _swipeStart;
+    }
+
+    /// <summary>Completes a swipe and turns the page if the gesture qualifies.</summary>
+    private bool EndSwipeTracking(PointerRoutedEventArgs e)
+    {
+        if (!_swipeTracking || e.Pointer.PointerId != _swipePointerId) return false;
+        _swipeTracking = false;
+
+        // Only when the page is fully on screen; otherwise sideways means panning.
+        if (PdfScrollViewer.ScrollableWidth > 1) return false;
+
+        double dx = _swipeLast.X - _swipeStart.X;
+        double dy = _swipeLast.Y - _swipeStart.Y;
+
+        if (Math.Abs(dx) < SwipeMinDistance) return false;
+        if (Math.Abs(dx) < Math.Abs(dy) * SwipeDirectionRatio) return false; // mostly vertical
+
+        // Dragging the page leftwards pulls the next one in, as on a touch screen.
+        return TurnPage(dx < 0 ? 1 : -1);
+    }
     // ------------------------------------------------------------------ drag and drop
 
     private void MainPage_DragOver(object sender, DragEventArgs e)

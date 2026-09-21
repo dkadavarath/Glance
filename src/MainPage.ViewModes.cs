@@ -162,7 +162,8 @@ public sealed partial class MainPage
 
     private void ToggleFullScreen()
     {
-        var appWindow = (Application.Current as App)?.MainWindow?.AppWindow;
+        var window = (Application.Current as App)?.MainWindow as MainWindow;
+        var appWindow = window?.AppWindow;
         if (appWindow == null) return;
 
         _isFullScreen = !_isFullScreen;
@@ -178,6 +179,10 @@ public sealed partial class MainPage
             _isFullScreen = !_isFullScreen; // presenter refused; keep the chrome consistent
             return;
         }
+
+        // The window keeps a row for the title bar, which shows as an empty strip along
+        // the top unless it is collapsed as well.
+        window?.SetTitleBarVisible(!_isFullScreen);
 
         // The toolbar is the only chrome left once the title bar goes, so hide it too and
         // leave Esc or F11 as the way back.

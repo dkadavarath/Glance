@@ -88,6 +88,22 @@ public sealed partial class MainWindow : Window
         return null;
     }
 
+    /// <summary>
+    /// Hides the title bar for full screen. The window keeps its own row for it, so
+    /// leaving it visible shows as a strip of chrome along the top with nothing in it.
+    /// </summary>
+    public void SetTitleBarVisible(bool visible)
+    {
+        if (AppTitleBar == null) return;
+
+        AppTitleBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+
+        // Dragging by the title bar only makes sense while there is one, and the caption
+        // buttons have to come back with it.
+        ExtendsContentIntoTitleBar = visible;
+        if (visible) SetTitleBar(AppTitleBar);
+    }
+
     [System.Runtime.InteropServices.DllImport("psapi.dll")]
     private static extern int EmptyWorkingSet(IntPtr hwProcess);
 
