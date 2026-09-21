@@ -124,7 +124,7 @@ public sealed partial class MainPage : Page
     {
         Current = this;
         this.InitializeComponent();
-        PagesRepeater.ItemsSource = _pages;
+        PagesRepeater.ItemsSource = _displayPages;
         PageListView.ItemsSource = _pages;
         RecentGridView.ItemsSource = _recentDocs;
 
@@ -141,6 +141,7 @@ public sealed partial class MainPage : Page
         InitializeSettings();
         InitializeLocalization();
         InitializeInput();
+        InitializeViewModes();
         if (_pendingFileToLoad != null)
         {
             var pending = _pendingFileToLoad;
@@ -209,6 +210,10 @@ public sealed partial class MainPage : Page
             if (SettingsTitleText != null) SettingsTitleText.Text = Glance.Services.LocalizationService.Get("Settings");
             if (AppThemeLabel != null) AppThemeLabel.Text = Glance.Services.LocalizationService.Get("AppTheme");
             if (ZoomAnchorLabel != null) ZoomAnchorLabel.Text = Glance.Services.LocalizationService.Get("ZoomAnchor");
+            if (ViewModeContinuousItem != null) ViewModeContinuousItem.Content = Glance.Services.LocalizationService.Get("ViewModeContinuous");
+            if (ViewModeSingleItem != null) ViewModeSingleItem.Content = Glance.Services.LocalizationService.Get("ViewModeSingle");
+            if (ViewModeTwoPageItem != null) ViewModeTwoPageItem.Content = Glance.Services.LocalizationService.Get("ViewModeTwoPage");
+            if (FullScreenButton != null) ToolTipService.SetToolTip(FullScreenButton, Glance.Services.LocalizationService.Get("FullScreen"));
             if (ZoomAnchorCursorItem != null) ZoomAnchorCursorItem.Content = Glance.Services.LocalizationService.Get("ZoomAnchorCursor");
             if (ZoomAnchorCenterItem != null) ZoomAnchorCenterItem.Content = Glance.Services.LocalizationService.Get("ZoomAnchorCenter");
 
@@ -459,6 +464,7 @@ public sealed partial class MainPage : Page
             }
 
             _pages.Clear();
+            _displayPages.Clear();
             _annotationHistory.Clear();
             _currentPageIndex = 0;
             _currentPdfPath = "";
@@ -801,7 +807,11 @@ public sealed partial class MainPage : Page
 
     private void PagesRepeater_ElementPrepared(Microsoft.UI.Xaml.Controls.ItemsRepeater sender, Microsoft.UI.Xaml.Controls.ItemsRepeaterElementPreparedEventArgs args)
     {
-        int index = args.Index;
+        // In single-page mode the repeater holds one item, so its index is not the page
+        // number; ask the view model which page this actually is.
+        int index = ResolvePageIndex(args.Index);
+        if (index < 0) return;
+
         _realizedLeft.Add(index);
         _ = EnsureLeftPageRenderedAsync(index);
     }
@@ -1299,6 +1309,7 @@ public sealed partial class MainPage : Page
             _isUnloading = false;
 
             _pages.Clear();
+            _displayPages.Clear();
             _annotationHistory.Clear();
             _currentPageIndex = 0;
             PageNumberInput.Text = "1";
@@ -1375,6 +1386,8 @@ public sealed partial class MainPage : Page
                         AnnotationsBackground = (_currentMode == EditMode.Navigate) ? null : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent)
                     });
                 }
+
+                RefreshDisplayPages();
 
                 System.Diagnostics.Debug.WriteLine($"✓ Placeholders created. PDF ready");
 
@@ -1486,35 +1499,52 @@ public sealed partial class MainPage : Page
  
     private async void NavigateToPage(int index)
     {
-        if (index >= 0 && _totalPages > 0 && index < _totalPages)
+        if (index < 0 || _totalPages == 0 || index >= _totalPages) return;
+
+        _currentPageIndex = index;
+
+        // Block ViewChanged scroll sync to avoid recursive selection jumps
+        _isScrollingProgrammatically = true;
+
+        PageNumberInput.Text = (index + 1).ToString();
+        PageListView.SelectedIndex = index;
+
+        if (_viewMode == PageViewMode.SinglePage)
         {
-            _currentPageIndex = index;
-            
-            // Block ViewChanged scroll sync to avoid recursive selection jumps
-            _isScrollingProgrammatically = true;
-            
-            PageNumberInput.Text = (index + 1).ToString();
-            PageListView.SelectedIndex = index;
-            
-            // Calculate target vertical offset
-            double targetOffset = 16.0; // PagesRepeater top margin (16)
-            for (int i = 0; i < index; i++)
-            {
-                targetOffset += _pages[i].PageHeight + 18.0 + 16.0; // item height + spacing
-            }
+            // There is nothing to scroll to: the page itself is swapped in.
+            ShowSinglePage(index);
+            PdfScrollViewer.ChangeView(null, 0, null, true);
+            _isScrollingProgrammatically = false;
+            UpdateVisiblePages();
+            return;
+        }
 
-            double zoom = PdfScrollViewer.ZoomFactor;
-            if (zoom <= 0) zoom = 1.0;
+        // Two-page mode scrolls to the row holding the page, not to the page.
+        int pageStep = _viewMode == PageViewMode.TwoPage ? 2 : 1;
+        int rowStart = _viewMode == PageViewMode.TwoPage ? index - (index % 2) : index;
 
-            PdfScrollViewer.ChangeView(null, targetOffset * zoom, null, true);
-            
-            // Fallback safety to reset the sync flag
-            await Task.Delay(1000);
-            if (_isScrollingProgrammatically)
+        double targetOffset = 16.0; // PagesRepeater top margin (16)
+        for (int i = 0; i < rowStart; i += pageStep)
+        {
+            double rowHeight = _pages[i].PageHeight;
+            if (pageStep == 2 && i + 1 < _pages.Count)
             {
-                _isScrollingProgrammatically = false;
-                UpdateVisiblePages();
+                rowHeight = Math.Max(rowHeight, _pages[i + 1].PageHeight);
             }
+            targetOffset += rowHeight + 18.0 + 16.0; // item height + spacing
+        }
+
+        double zoom = PdfScrollViewer.ZoomFactor;
+        if (zoom <= 0) zoom = 1.0;
+
+        PdfScrollViewer.ChangeView(null, targetOffset * zoom, null, true);
+
+        // Fallback safety to reset the sync flag
+        await Task.Delay(1000);
+        if (_isScrollingProgrammatically)
+        {
+            _isScrollingProgrammatically = false;
+            UpdateVisiblePages();
         }
     }
 
@@ -1580,6 +1610,18 @@ public sealed partial class MainPage : Page
     {
         if (_pdfRenderService == null || _totalPages == 0 || _pages.Count == 0) return;
 
+        if (_viewMode == PageViewMode.SinglePage)
+        {
+            // Navigation decides which page is shown, so there is nothing to derive from
+            // the scroll offset; just keep that one page rendered and release the rest.
+            _ = EnsureLeftPageRenderedAsync(_currentPageIndex);
+            for (int i = 0; i < _pages.Count; i++)
+            {
+                if (i != _currentPageIndex) CheckAndClearLeftPage(i);
+            }
+            return;
+        }
+
         double offset = PdfScrollViewer.VerticalOffset;
         double zoom = PdfScrollViewer.ZoomFactor;
         if (zoom <= 0) zoom = 1.0;
@@ -1589,9 +1631,17 @@ public sealed partial class MainPage : Page
         double accumulatedHeight = 16.0; // PagesRepeater top margin (16)
         bool activePageFound = false;
 
-        for (int i = 0; i < _pages.Count; i++)
+        // Two-page mode wraps into rows of two, so a row advances by two pages and is as
+        // tall as the taller of the pair.
+        int pageStep = _viewMode == PageViewMode.TwoPage ? 2 : 1;
+
+        for (int i = 0; i < _pages.Count; i += pageStep)
         {
             double pageHeight = _pages[i].PageHeight;
+            if (pageStep == 2 && i + 1 < _pages.Count)
+            {
+                pageHeight = Math.Max(pageHeight, _pages[i + 1].PageHeight);
+            }
             double itemHeight = pageHeight + 18.0; // border height + margin
 
             // Determine active page (closest to the current scroll offset top)

@@ -179,12 +179,42 @@ public sealed partial class MainPage
             sv.ChangeView(sv.HorizontalOffset - delta, null, null, true);
             e.Handled = true;
         }
+
+        if (_viewMode == PageViewMode.SinglePage && modifiers == VirtualKeyModifiers.None)
+        {
+            // Page-wise scrolling: once the page bottoms out, the wheel moves to the next.
+            if (delta < 0 && sv.VerticalOffset >= sv.ScrollableHeight - 1 && _currentPageIndex < _totalPages - 1)
+            {
+                NavigateToPage(_currentPageIndex + 1);
+                e.Handled = true;
+            }
+            else if (delta > 0 && sv.VerticalOffset <= 1 && _currentPageIndex > 0)
+            {
+                NavigateToPage(_currentPageIndex - 1);
+                e.Handled = true;
+            }
+        }
     }
 
     // -------------------------------------------------------------------- hand tool
 
     private void MainPage_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        if (e.Key == VirtualKey.F11)
+        {
+            ToggleFullScreen();
+            e.Handled = true;
+            return;
+        }
+
+        // Esc leaves full screen, but the search bar uses it too, so defer while typing.
+        if (e.Key == VirtualKey.Escape && _isFullScreen && !IsKeyboardInputFocused())
+        {
+            ToggleFullScreen();
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key != VirtualKey.Space) return;
         if (e.KeyStatus.WasKeyDown) { e.Handled = true; return; } // swallow auto-repeat
         if (IsKeyboardInputFocused()) return;

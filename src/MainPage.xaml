@@ -18,7 +18,7 @@
 
     <Grid RowDefinitions="Auto, *" AllowDrop="True" DragOver="MainPage_DragOver" Drop="MainPage_Drop">
         <!-- Fluent Design Header Bar: Translucent / Transparent to show window Mica background -->
-        <Border Grid.Row="0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" Padding="12,6" Background="Transparent">
+        <Border x:Name="HeaderBar" Grid.Row="0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" Padding="12,6" Background="Transparent">
             <Grid ColumnDefinitions="Auto, *, Auto">
                 
                 <!-- Left Section: Sidebar Toggle, Open File, Separator, Page Navigator, Annotation Tools -->
@@ -138,6 +138,19 @@
                         <ComboBoxItem Content="200%"/>
                         <ComboBoxItem x:Name="ZoomFitWidthItem" Content="Ajustar Ancho"/>
                     </ComboBox>
+
+                    <!-- Page Layout Mode -->
+                    <ComboBox x:Name="ViewModeComboBox" SelectedIndex="0" Width="135" Height="32" VerticalAlignment="Center"
+                              SelectionChanged="ViewModeComboBox_SelectionChanged">
+                        <ComboBoxItem x:Name="ViewModeContinuousItem" Content="Continuous"/>
+                        <ComboBoxItem x:Name="ViewModeSingleItem" Content="Single page"/>
+                        <ComboBoxItem x:Name="ViewModeTwoPageItem" Content="Two pages"/>
+                    </ComboBox>
+
+                    <!-- Full Screen Button -->
+                    <Button x:Name="FullScreenButton" Click="FullScreenButton_Click" Padding="8,6" ToolTipService.ToolTip="Full screen (F11)">
+                        <SymbolIcon Symbol="FullScreen"/>
+                    </Button>
 
                     <!-- Rotate Button -->
                     <Button x:Name="RotateButton" Click="Rotate_Click" Padding="8,6" ToolTipService.ToolTip="Rotar vista (90°)">
