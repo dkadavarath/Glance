@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
@@ -84,9 +85,6 @@ public sealed partial class MainPage
 
         PdfScrollViewer.SizeChanged += (_, _) => UpdatePageCentering();
 
-        // Pinch: the ScrollViewer no longer does it.
-        PagesHost.ManipulationStarted += PagesHost_ManipulationStarted;
-        PagesHost.ManipulationDelta += PagesHost_ManipulationDelta;
 
         // Preview phase: the ScrollViewer treats Space as page-down, so a bubble-phase
         // handler would arrive after it had already scrolled.
@@ -105,6 +103,9 @@ public sealed partial class MainPage
     private const float MaxZoom = 6.0f;
 
     private float _zoomFactor = 1.0f;
+    private float _zoomTarget = 1.0f;
+    private Point _zoomAnchorPoint;
+    private bool _zoomAnimating;
 
     internal float ZoomFactor => _zoomFactor;
 
@@ -128,6 +129,52 @@ public sealed partial class MainPage
     /// Zooms to <paramref name="targetZoom"/>, keeping the content under
     /// <paramref name="viewportAnchor"/> in place. A null anchor means the viewport centre.
     /// </summary>
+    /// <summary>
+    /// Eases towards <paramref name="targetZoom"/> rather than stepping to it. A wheel
+    /// notch applied whole is a visible jump; run over several frames it reads as a
+    /// continuous zoom, which is what the ScrollViewer's own zoom gave for free before
+    /// this moved into layout.
+    /// </summary>
+    private void RequestZoom(float targetZoom, Point? viewportAnchor)
+    {
+        var sv = PdfScrollViewer;
+        if (sv == null) return;
+
+        _zoomTarget = Math.Clamp(targetZoom, MinZoom, MaxZoom);
+        _zoomAnchorPoint = viewportAnchor ?? new Point(sv.ViewportWidth / 2, sv.ViewportHeight / 2);
+
+        if (Math.Abs(_zoomTarget - _zoomFactor) < 0.0005f) return;
+
+        if (!_zoomAnimating)
+        {
+            _zoomAnimating = true;
+            CompositionTarget.Rendering += Zoom_Tick;
+        }
+    }
+
+    private void StopZoomAnimation()
+    {
+        if (!_zoomAnimating) return;
+        _zoomAnimating = false;
+        CompositionTarget.Rendering -= Zoom_Tick;
+    }
+
+    private void Zoom_Tick(object? sender, object e)
+    {
+        float remaining = _zoomTarget - _zoomFactor;
+
+        // Close enough that another frame would not show: land it and stop.
+        if (Math.Abs(remaining) < 0.002f)
+        {
+            ApplyZoom(_zoomTarget, _zoomAnchorPoint);
+            StopZoomAnimation();
+            return;
+        }
+
+        ApplyZoom(_zoomFactor + (remaining * 0.3f), _zoomAnchorPoint);
+    }
+
+    /// <summary>Applies a zoom immediately, holding the content under the anchor in place.</summary>
     private void ApplyZoom(float targetZoom, Point? viewportAnchor)
     {
         var sv = PdfScrollViewer;
@@ -163,30 +210,11 @@ public sealed partial class MainPage
     /// <summary>Returns to 100% without moving the view sideways.</summary>
     internal void ResetZoom()
     {
+        StopZoomAnimation();
+        _zoomTarget = 1.0f;
         _zoomFactor = 1.0f;
         foreach (var page in _pages) page.Scale = 1.0;
         UpdatePageCentering();
-    }
-
-    // The ScrollViewer's own zoom is off, so pinch is handled here. A precision touchpad
-    // sends Ctrl+wheel and goes through the wheel handler instead.
-    private float _pinchStartZoom = 1.0f;
-
-    private void PagesHost_ManipulationStarted(object sender, ManipulationStartedRoutedEventArgs e)
-    {
-        _pinchStartZoom = _zoomFactor;
-    }
-
-    private void PagesHost_ManipulationDelta(object sender, ManipulationDeltaRoutedEventArgs e)
-    {
-        float scale = (float)e.Cumulative.Scale;
-        if (scale <= 0) return;
-
-        // Anchored on the gesture's own centre, which is what the fingers expect,
-        // regardless of the cursor-versus-centre setting that applies to wheel zoom.
-        Point anchor = e.Position;
-        ApplyZoom(_pinchStartZoom * scale, anchor);
-        e.Handled = true;
     }
 
     // ------------------------------------------------------------- zoom anchor setting
@@ -263,7 +291,11 @@ public sealed partial class MainPage
 
             // Exponential so each notch is a constant ratio: one 120-unit notch ~ 20%.
             float step = MathF.Pow(1.0015f, delta);
-            ApplyZoom(_zoomFactor * step,
+
+            // Compound onto a zoom still in flight, so spinning the wheel keeps
+            // accelerating instead of restarting from wherever the ease had reached.
+            float basis = _zoomAnimating ? _zoomTarget : _zoomFactor;
+            RequestZoom(basis * step,
                 _zoomAnchorMode == ZoomAnchorMode.Cursor ? point.Position : null);
             e.Handled = true;
             return;
@@ -474,6 +506,7 @@ public sealed partial class MainPage
     private void PdfScrollViewer_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         StopInertia();
+        TrackTouchContact(e, down: true);
         StopSmoothHorizontalScroll();
         BeginSwipeTracking(e);
 
@@ -505,6 +538,7 @@ public sealed partial class MainPage
         _lastViewerPointerPosition = position;
 
         if (_swipeTracking && e.Pointer.PointerId == _swipePointerId) _swipeLast = position;
+        UpdateTouchContact(e, position);
 
         if (!_handToolPanning) return;
 
@@ -532,6 +566,8 @@ public sealed partial class MainPage
 
     private void PdfScrollViewer_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        TrackTouchContact(e, down: false);
+
         if (EndSwipeTracking(e))
         {
             e.Handled = true;
@@ -547,6 +583,8 @@ public sealed partial class MainPage
 
     private void PdfScrollViewer_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
     {
+        TrackTouchContact(e, down: false);
+
         // The ScrollViewer takes the pointer to pan, so a swipe usually ends here rather
         // than in PointerReleased.
         EndSwipeTracking(e);
@@ -630,6 +668,79 @@ public sealed partial class MainPage
         if (speed < InertiaMinSpeed) StopInertia();
     }
 
+
+    // ------------------------------------------------------------------ touch pinch
+
+    // Pinch is read from the raw contacts rather than through ManipulationMode. Setting
+    // a manipulation mode on content inside a ScrollViewer takes that region away from
+    // DirectManipulation, which costs the smooth, inertial, diagonal panning the
+    // ScrollViewer otherwise gives -- too high a price for a pinch.
+    private readonly Dictionary<uint, Point> _touchContacts = new();
+    private double _pinchStartDistance;
+    private float _pinchStartZoom = 1.0f;
+    private bool _pinching;
+
+    private void TrackTouchContact(PointerRoutedEventArgs e, bool down)
+    {
+        if (e.Pointer.PointerDeviceType != PointerDeviceType.Touch) return;
+
+        uint id = e.Pointer.PointerId;
+        if (down)
+        {
+            _touchContacts[id] = e.GetCurrentPoint(PdfScrollViewer).Position;
+        }
+        else
+        {
+            _touchContacts.Remove(id);
+        }
+
+        if (_touchContacts.Count == 2)
+        {
+            _pinching = true;
+            _pinchStartDistance = CurrentContactDistance();
+            _pinchStartZoom = _zoomAnimating ? _zoomTarget : _zoomFactor;
+
+            // Two fingers is a pinch, not a page swipe.
+            _swipeTracking = false;
+        }
+        else if (_touchContacts.Count < 2)
+        {
+            _pinching = false;
+        }
+    }
+
+    private void UpdateTouchContact(PointerRoutedEventArgs e, Point position)
+    {
+        if (e.Pointer.PointerDeviceType != PointerDeviceType.Touch) return;
+        if (!_touchContacts.ContainsKey(e.Pointer.PointerId)) return;
+
+        _touchContacts[e.Pointer.PointerId] = position;
+
+        if (!_pinching || _touchContacts.Count != 2 || _pinchStartDistance <= 1) return;
+
+        double distance = CurrentContactDistance();
+        if (distance <= 1) return;
+
+        RequestZoom((float)(_pinchStartZoom * (distance / _pinchStartDistance)), ContactMidpoint());
+    }
+
+    private double CurrentContactDistance()
+    {
+        if (_touchContacts.Count != 2) return 0;
+
+        var points = _touchContacts.Values.ToList();
+        double dx = points[1].X - points[0].X;
+        double dy = points[1].Y - points[0].Y;
+        return Math.Sqrt((dx * dx) + (dy * dy));
+    }
+
+    private Point ContactMidpoint()
+    {
+        if (_touchContacts.Count != 2) return new Point(PdfScrollViewer.ViewportWidth / 2, PdfScrollViewer.ViewportHeight / 2);
+
+        var points = _touchContacts.Values.ToList();
+        return new Point((points[0].X + points[1].X) / 2, (points[0].Y + points[1].Y) / 2);
+    }
 
     // ------------------------------------------------------------------- page swipes
 

@@ -1605,7 +1605,7 @@ public sealed partial class MainPage : Page
                 break;
         }
 
-        ApplyZoom(zoomFactor, ResolveZoomAnchor());
+        RequestZoom(zoomFactor, ResolveZoomAnchor());
     }
 
 

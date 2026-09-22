@@ -307,7 +307,7 @@
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" ViewChanged="PdfScrollViewer_ViewChanged">
                     <!-- Host is kept at least as wide as the viewport, so the pages centre in
                          it while they fit and only widen past it once zoomed in. -->
-                    <Grid x:Name="PagesHost" Background="Transparent" HorizontalAlignment="Left" ManipulationMode="Scale">
+                    <Grid x:Name="PagesHost" Background="Transparent" HorizontalAlignment="Left">
                     <ItemsRepeater x:Name="PagesRepeater" Margin="0,16" HorizontalAlignment="Center" ElementPrepared="PagesRepeater_ElementPrepared" ElementClearing="PagesRepeater_ElementClearing">
                     <ItemsRepeater.Layout>
                         <StackLayout Spacing="16"/>
