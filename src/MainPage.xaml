@@ -303,7 +303,7 @@
                     <ColumnDefinition x:Name="SecondaryViewerColumn" Width="0"/>
                 </Grid.ColumnDefinitions>
 
-                <ScrollViewer Grid.Column="0" x:Name="PdfScrollViewer" Background="Transparent" HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled" ZoomMode="Disabled" 
+                <ScrollViewer Grid.Column="0" x:Name="PdfScrollViewer" Background="Transparent" HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled" ZoomMode="Enabled" MinZoomFactor="0.2" MaxZoomFactor="5" 
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" ViewChanged="PdfScrollViewer_ViewChanged">
                     <!-- Host is kept at least as wide as the viewport, so the pages centre in
                          it while they fit and only widen past it once zoomed in. -->
