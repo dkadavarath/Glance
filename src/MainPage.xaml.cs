@@ -1535,8 +1535,11 @@ public sealed partial class MainPage : Page
             targetOffset += rowHeight + 18.0 + 16.0; // item height + spacing
         }
 
-        // Offsets are already in zoomed units: the zoom is baked into each page box.
-        PdfScrollViewer.ChangeView(null, targetOffset, null, true);
+        // targetOffset is in layout units; the scroll wants rendered pixels, which differ
+        // by whatever zoom the ScrollViewer is holding mid-gesture.
+        double gestureZoom = PdfScrollViewer.ZoomFactor;
+        if (gestureZoom <= 0) gestureZoom = 1.0;
+        PdfScrollViewer.ChangeView(null, targetOffset * gestureZoom, null, true);
 
         // Fallback safety to reset the sync flag
         await Task.Delay(1000);
@@ -1625,7 +1628,13 @@ public sealed partial class MainPage : Page
             return;
         }
 
-        double currentOffset = PdfScrollViewer.VerticalOffset;
+        // Offsets are rendered pixels; page boxes are layout units. While a pinch is in
+        // flight the ScrollViewer holds a zoom of its own between the two, and reading
+        // them as the same thing put the active page wildly wrong -- which cleared the
+        // pages actually on screen and sent the sidebar chasing them.
+        double gestureZoom = PdfScrollViewer.ZoomFactor;
+        if (gestureZoom <= 0) gestureZoom = 1.0;
+        double currentOffset = PdfScrollViewer.VerticalOffset / gestureZoom;
         int activePageIndex = 0;
         double accumulatedHeight = 16.0; // PagesRepeater top margin (16)
         bool activePageFound = false;

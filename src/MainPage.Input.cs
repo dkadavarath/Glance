@@ -331,18 +331,14 @@ public sealed partial class MainPage
 
         if (modifiers.HasFlag(VirtualKeyModifiers.Control))
         {
+            // Deliberately not handled. With ZoomMode on, DirectManipulation takes
+            // Ctrl+wheel for zoom below the routed events, so zooming here as well meant
+            // two zooms at once -- which is what made Ctrl+wheel scroll as it zoomed.
+            // The gesture belongs to the ScrollViewer; the result is folded into layout
+            // when it settles.
             StopInertia();
             StopSmoothHorizontalScroll();
-
-            // Exponential so each notch is a constant ratio: one 120-unit notch ~ 20%.
-            float step = MathF.Pow(1.0015f, delta);
-
-            // Compound onto a zoom still in flight, so spinning the wheel keeps
-            // accelerating instead of restarting from wherever the ease had reached.
-            float basis = _zoomAnimating ? _zoomTarget : _zoomFactor;
-            RequestZoom(basis * step,
-                _zoomAnchorMode == ZoomAnchorMode.Cursor ? point.Position : null);
-            e.Handled = true;
+            StopZoomAnimation();
             return;
         }
 
